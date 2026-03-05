@@ -2,6 +2,9 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   createTypstCompiler,
   createTypstRenderer,
+  MemoryAccessModel,
+  FetchPackageRegistry,
+  initOptions,
   type TypstCompiler,
   type TypstRenderer,
   type RenderSession,
@@ -53,9 +56,16 @@ async function getCompilerInstance(version: string): Promise<CompilerInstance> {
   if (cached) return cached;
 
   const promise = (async () => {
+    const accessModel = new MemoryAccessModel();
+    const packageRegistry = new FetchPackageRegistry(accessModel);
+
     const compiler = createTypstCompiler();
     await compiler.init({
       getModule: () => wasmUrl(version, "typst-ts-web-compiler"),
+      beforeBuild: [
+        initOptions.withAccessModel(accessModel),
+        initOptions.withPackageRegistry(packageRegistry),
+      ],
     });
 
     const renderer = createTypstRenderer();
@@ -136,12 +146,20 @@ export function useTypstCompiler(
   activeFileContent: string | null,
   allFiles: FileEntry[],
   version: string,
-  containerRef: React.RefObject<HTMLDivElement | null>
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  mainFilePath?: string,
 ) {
   const [error, setError] = useState<string | null>(null);
   const [compiling, setCompiling] = useState(false);
   const [diagnostics, setDiagnostics] = useState<CompilerDiagnostic[]>([]);
   const [pages, setPages] = useState<PageInfo[]>([]);
+
+  // Compile trigger — increment to request a new compilation
+  const [compileSeq, setCompileSeq] = useState(0);
+
+  const triggerCompile = useCallback(() => {
+    setCompileSeq((s) => s + 1);
+  }, []);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastCompileMsRef = useRef(300);
@@ -157,15 +175,14 @@ export function useTypstCompiler(
   const activeFilePathRef = useRef(activeFilePath);
   activeFilePathRef.current = activeFilePath;
 
-  // Find the main .typ file for compilation
+  // Use the project's configured main file, or fall back to main.typ / first .typ
   const mainFile = useMemo(() => {
-    // Prefer a main.typ if it exists
+    if (mainFilePath) return mainFilePath;
     const main = allFiles.find((f) => f.path === "main.typ");
     if (main) return main.path;
-    // Otherwise use the first .typ file
     const first = allFiles.find((f) => f.path.endsWith(".typ"));
     return first?.path ?? "main.typ";
-  }, [allFiles]);
+  }, [mainFilePath, allFiles]);
 
   // Mount all project files into the compiler VFS
   const mountAllFiles = useCallback(
@@ -205,16 +222,22 @@ export function useTypstCompiler(
     vfsMountedRef.current = false;
   }, [allFiles]);
 
-  // Compile and render
+  // Recompile when version or mainFile changes
   useEffect(() => {
-    if (!activeFilePath || activeFileContent === null) return;
+    setCompileSeq((s) => s + 1);
+  }, [version, mainFile]);
+
+  // Compile and render — only triggered by compileSeq changes
+  useEffect(() => {
+    if (compileSeq === 0) return;
 
     if (timerRef.current) {
       clearTimeout(timerRef.current);
     }
 
+    const content = contentRef.current;
     const debounceMs = getDebounceMs(
-      activeFileContent.length,
+      content?.length ?? 0,
       lastCompileMsRef.current
     );
 
@@ -265,12 +288,16 @@ export function useTypstCompiler(
               .map((d: any) => `${d.path}:${d.range}: ${d.message}`)
               .join("\n") || "Compilation failed";
           setError(errMsg);
+          // Don't return — keep the last successful render visible in the canvas
           return;
         }
 
         // Render using the renderer
         const container = containerRef.current;
         if (container) {
+          // Snapshot old children so we can remove them after the new render
+          const oldChildren = Array.from(container.children);
+
           await renderer.renderToCanvas({
             container,
             format: "vector" as any,
@@ -278,6 +305,9 @@ export function useTypstCompiler(
             backgroundColor: "#ffffff",
             pixelPerPt: 2,
           } as any);
+
+          // Remove old render now that new one is in place (no flash)
+          oldChildren.forEach((c) => c.remove());
 
           // Get page info for zoom controls
           await renderer.runWithSession(
@@ -309,7 +339,7 @@ export function useTypstCompiler(
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [activeFileContent, activeFilePath, version, mainFile, mountAllFiles, containerRef]);
+  }, [compileSeq, version, mainFile, mountAllFiles, containerRef]);
 
   // Reset compiler when version changes
   useEffect(() => {
@@ -319,7 +349,7 @@ export function useTypstCompiler(
 
   const clearDiagnostics = useCallback(() => setDiagnostics([]), []);
 
-  return { error, compiling, diagnostics, clearDiagnostics, pages };
+  return { error, compiling, diagnostics, clearDiagnostics, pages, triggerCompile };
 }
 
 export async function exportPdf(
