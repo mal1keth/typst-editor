@@ -85,6 +85,10 @@ export const api = {
       request<{ ok: boolean }>(`/projects/${projectId}/files/${path}`, {
         method: "DELETE",
       }),
+    getAll: (projectId: string) =>
+      request<{
+        files: Array<{ path: string; content: string; binary: boolean }>;
+      }>(`/projects/${projectId}/files-all`),
   },
   github: {
     repos: () => request<GithubRepo[]>("/github/repos"),
