@@ -26,6 +26,21 @@ export const api = {
   auth: {
     me: () => request<User>("/auth/me"),
     logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+    register: (email: string, password: string, displayName: string) =>
+      request<{ ok: boolean; userId: string }>("/auth/register", {
+        method: "POST",
+        body: JSON.stringify({ email, password, displayName }),
+      }),
+    login: (email: string, password: string) =>
+      request<{ ok: boolean }>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      }),
+    setPassword: (password: string, currentPassword?: string) =>
+      request<{ ok: boolean }>("/auth/set-password", {
+        method: "POST",
+        body: JSON.stringify({ password, currentPassword }),
+      }),
   },
   projects: {
     list: () =>
@@ -94,6 +109,25 @@ export const api = {
       ),
     status: (projectId: string) =>
       request<GithubStatus>(`/github/projects/${projectId}/github/status`),
+    checkRepo: (owner: string, repo: string) =>
+      request<{
+        hasTypFiles: boolean;
+        typFiles: string[];
+        defaultBranch: string;
+        totalFiles: number;
+      }>(`/github/repos/${owner}/${repo}/check`),
+    import: (repoFullName: string, branch?: string, projectName?: string) =>
+      request<{
+        ok: boolean;
+        projectId: string;
+        projectName: string;
+        fileCount: number;
+        typFileCount: number;
+        mainFile: string;
+      }>("/github/import", {
+        method: "POST",
+        body: JSON.stringify({ repoFullName, branch, projectName }),
+      }),
   },
   shares: {
     create: (
@@ -129,9 +163,12 @@ export interface User {
   authProvider: string;
   email: string | null;
   githubLogin: string | null;
+  githubId: number | null;
   displayName: string;
   avatarUrl: string | null;
   createdAt: string;
+  hasPassword: boolean;
+  hasGithub: boolean;
 }
 
 export interface Project {

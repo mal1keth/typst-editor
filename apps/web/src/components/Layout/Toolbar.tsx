@@ -8,12 +8,15 @@ interface Props {
   saving: boolean;
   githubLinked: boolean;
   compilerVersion: string;
+  errorCount: number;
+  showingCompilerOutput: boolean;
   onBack: () => void;
   onShare: () => void;
   onGitHub: () => void;
   onExportPdf: () => void;
   exportingPdf: boolean;
   onVersionChange: (version: string) => void;
+  onCompilerOutput: () => void;
 }
 
 export function Toolbar({
@@ -21,12 +24,15 @@ export function Toolbar({
   saving,
   githubLinked,
   compilerVersion,
+  errorCount,
+  showingCompilerOutput,
   onBack,
   onShare,
   onGitHub,
   onExportPdf,
   exportingPdf,
   onVersionChange,
+  onCompilerOutput,
 }: Props) {
   const handleVersionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newVersion = e.target.value;
@@ -62,6 +68,23 @@ export function Toolbar({
             </option>
           ))}
         </select>
+        <button
+          onClick={onCompilerOutput}
+          className={`relative rounded px-3 py-1.5 text-sm ${
+            showingCompilerOutput
+              ? "bg-gray-700 text-gray-100"
+              : errorCount > 0
+                ? "bg-red-900/50 text-red-300 hover:bg-red-900/70"
+                : "bg-gray-800 text-gray-300 hover:bg-gray-700"
+          }`}
+        >
+          Errors
+          {errorCount > 0 && (
+            <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] text-white">
+              {errorCount}
+            </span>
+          )}
+        </button>
         <button
           onClick={onExportPdf}
           disabled={exportingPdf}

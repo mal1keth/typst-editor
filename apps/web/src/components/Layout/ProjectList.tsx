@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useProjectStore } from "@/stores/projectStore";
 import { useAuthStore } from "@/stores/authStore";
+import { AccountSettings } from "@/components/Auth/AccountSettings";
+import { ImportGitHubDialog } from "@/components/GitHub/ImportGitHubDialog";
 
 interface Props {
   onOpenProject: (id: string) => void;
@@ -18,6 +20,8 @@ export function ProjectList({ onOpenProject }: Props) {
   } = useProjectStore();
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showImport, setShowImport] = useState(false);
 
   useEffect(() => {
     loadProjects();
@@ -51,6 +55,12 @@ export function ProjectList({ onOpenProject }: Props) {
               />
             )}
             <button
+              onClick={() => setShowSettings(true)}
+              className="rounded px-3 py-1 text-sm text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+            >
+              Settings
+            </button>
+            <button
               onClick={logout}
               className="rounded px-3 py-1 text-sm text-gray-400 hover:bg-gray-800 hover:text-gray-200"
             >
@@ -74,6 +84,15 @@ export function ProjectList({ onOpenProject }: Props) {
           >
             Create
           </button>
+          {user?.hasGithub && (
+            <button
+              type="button"
+              onClick={() => setShowImport(true)}
+              className="rounded-lg border border-gray-700 px-4 py-2 text-sm font-medium text-gray-300 hover:bg-gray-800"
+            >
+              Import from GitHub
+            </button>
+          )}
         </form>
 
         {loadingList ? (
@@ -148,6 +167,24 @@ export function ProjectList({ onOpenProject }: Props) {
           </>
         )}
       </div>
+
+      {showSettings && user && (
+        <AccountSettings
+          user={user}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
+
+      {showImport && (
+        <ImportGitHubDialog
+          onClose={() => setShowImport(false)}
+          onImported={(projectId) => {
+            setShowImport(false);
+            loadProjects();
+            onOpenProject(projectId);
+          }}
+        />
+      )}
     </div>
   );
 }
