@@ -114,6 +114,11 @@ export const api = {
       ),
     status: (projectId: string) =>
       request<GithubStatus>(`/github/projects/${projectId}/github/status`),
+    autoPull: (projectId: string) =>
+      request<{ pulled: boolean; reason?: string; commitSha?: string; fileCount?: number }>(
+        `/github/projects/${projectId}/github/auto-pull`,
+        { method: "POST" }
+      ),
     checkRepo: (owner: string, repo: string) =>
       request<{
         hasTypFiles: boolean;
@@ -158,6 +163,21 @@ export const api = {
       request<{ projectId: string; permission: string }>(
         `/shares/${token}/join`,
         { method: "POST" }
+      ),
+  },
+  // Anonymous access via share token (no auth required)
+  shared: {
+    project: (token: string) =>
+      request<ProjectWithFiles & { permission: string }>(
+        `/shared/${token}/project`
+      ),
+    filesAll: (token: string) =>
+      request<{ files: Array<{ path: string; content: string; binary: boolean }> }>(
+        `/shared/${token}/files-all`
+      ),
+    fileGet: (token: string, path: string) =>
+      request<{ path: string; content: string }>(
+        `/shared/${token}/files/${encodeFilePath(path)}`
       ),
   },
 };
