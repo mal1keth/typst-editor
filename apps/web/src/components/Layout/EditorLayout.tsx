@@ -9,7 +9,7 @@ import { GitHubPanel } from "@/components/GitHub/GitHubPanel";
 import { ShareDialog } from "@/components/Share/ShareDialog";
 import { Toolbar } from "@/components/Layout/Toolbar";
 import { useProjectStore } from "@/stores/projectStore";
-import { useTypstCompiler, exportPdf, getSelectedVersion } from "@/hooks/useTypstCompiler";
+import { useTypstCompiler, exportPdf, TYPST_VERSION } from "@/hooks/useTypstCompiler";
 import {
   setupCollaboration,
   applyLocalChange,
@@ -27,28 +27,25 @@ interface Props {
 }
 
 export function EditorLayout({ projectId, onBack }: Props) {
-  // Individual selectors: EditorLayout only re-renders when these specific
-  // fields change. Crucially, we do NOT subscribe to `activeFileContent` —
-  // it changes every keystroke and would cause the entire layout to re-render.
-  // Instead, content is tracked via contentRef (updated by handleChange).
-  const currentProject = useProjectStore(s => s.currentProject);
-  const activeFilePath = useProjectStore(s => s.activeFilePath);
-  const loadingProject = useProjectStore(s => s.loadingProject);
-  const savingFile = useProjectStore(s => s.savingFile);
-  const loadProject = useProjectStore(s => s.loadProject);
-  const openFile = useProjectStore(s => s.openFile);
-  const saveFile = useProjectStore(s => s.saveFile);
-  const createFile = useProjectStore(s => s.createFile);
-  const deleteFile = useProjectStore(s => s.deleteFile);
-  const setActiveFileContent = useProjectStore(s => s.setActiveFileContent);
-  const updateMainFile = useProjectStore(s => s.updateMainFile);
+  const {
+    currentProject,
+    activeFilePath,
+    loadingProject,
+    savingFile,
+    loadProject,
+    openFile,
+    saveFile,
+    createFile,
+    deleteFile,
+    setActiveFileContent,
+    updateMainFile,
+  } = useProjectStore();
 
   const [showGitHub, setShowGitHub] = useState(false);
   const [showShare, setShowShare] = useState(false);
   const [connected, setConnected] = useState(false);
   const [peerCount, setPeerCount] = useState(0);
   const [exportingPdf, setExportingPdf] = useState(false);
-  const [compilerVersion, setCompilerVersion] = useState(getSelectedVersion);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const collabRef = useRef<CollabState | null>(null);
   const isRemoteUpdateRef = useRef(false);
@@ -61,13 +58,13 @@ export function EditorLayout({ projectId, onBack }: Props) {
 
   const allFiles = currentProject?.files || [];
 
-  // Content ref — always has the latest file content, updated by handleChange
-  // and collab callbacks. Read by the compile hook without triggering re-renders.
+  // Content ref — always has the latest file content, updated by handleChange.
+  // Read by the compile hook without triggering re-renders.
   const contentRef = useRef<string | null>(null);
+  // Tracks when the user last typed — compile hook defers rendering until this passes
+  const typingUntilRef = useRef(0);
 
   // Stable initial content — only recomputes when switching files.
-  // Reads from the store non-reactively (getState) so keystroke-driven
-  // store updates don't trigger EditorLayout re-renders.
   const editorInitialContent = useMemo(() => {
     const content = useProjectStore.getState().activeFileContent;
     contentRef.current = content;
@@ -81,8 +78,8 @@ export function EditorLayout({ projectId, onBack }: Props) {
       activeFilePath,
       contentRef,
       allFiles,
-      compilerVersion,
       currentProject?.mainFile,
+      typingUntilRef,
     );
 
   // Persist compile mode
@@ -110,7 +107,6 @@ export function EditorLayout({ projectId, onBack }: Props) {
   useEffect(() => {
     if (!activeFilePath || !currentProject) return;
 
-    // Clean up previous collaboration
     if (collabRef.current) {
       collabRef.current.destroy();
       collabRef.current = null;
@@ -123,7 +119,6 @@ export function EditorLayout({ projectId, onBack }: Props) {
       contentRef.current || "",
       token,
       (content) => {
-        // Remote update received
         isRemoteUpdateRef.current = true;
         contentRef.current = content;
         setActiveFileContent(content);
@@ -147,23 +142,25 @@ export function EditorLayout({ projectId, onBack }: Props) {
 
   const handleChange = useCallback(
     (content: string, changes: ChangeSet) => {
+      // Update ref immediately — compile hook reads this, no re-render triggered.
+      // Do NOT call setActiveFileContent() here — it triggers a Zustand broadcast
+      // that re-renders the entire EditorLayout tree on every keystroke.
       contentRef.current = content;
-      setActiveFileContent(content);
+      typingUntilRef.current = Date.now() + 300;
 
-      // Trigger recompilation only in live mode
       if (compileMode === 'live') {
         triggerCompile();
       }
 
-      // Send diff-based update to collaborators (not full content)
       if (collabRef.current && !isRemoteUpdateRef.current) {
         applyLocalChange(collabRef.current, changes);
       }
 
-      // Auto-save after 1.5s of inactivity
+      // Debounced save — syncs store + persists to server after 1.5s of inactivity
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       saveTimerRef.current = setTimeout(() => {
         if (activeFilePath) {
+          setActiveFileContent(content);
           saveFile(activeFilePath, content);
         }
       }, 1500);
@@ -171,8 +168,6 @@ export function EditorLayout({ projectId, onBack }: Props) {
     [activeFilePath, saveFile, setActiveFileContent, triggerCompile, compileMode]
   );
 
-  // Stable callback refs — extracted from inline arrows so memo'd children
-  // don't re-render on every parent re-render (which happens every keystroke)
   const handleShare = useCallback(() => setShowShare(true), []);
   const handleToggleGitHub = useCallback(() => setShowGitHub(prev => !prev), []);
   const handleToggleCompilerOutput = useCallback(() => setShowCompilerOutput(prev => !prev), []);
@@ -190,14 +185,13 @@ export function EditorLayout({ projectId, onBack }: Props) {
         currentProject.files,
         currentProject.mainFile,
         currentProject.mainFile,
-        compilerVersion
       );
     } catch (e: any) {
       alert(`PDF export failed: ${e.message}`);
     } finally {
       setExportingPdf(false);
     }
-  }, [currentProject, compilerVersion, projectId]);
+  }, [currentProject, projectId]);
 
   if (loadingProject || !currentProject) {
     return (
@@ -213,7 +207,6 @@ export function EditorLayout({ projectId, onBack }: Props) {
         projectName={currentProject.name}
         saving={savingFile}
         githubLinked={!!currentProject.githubRepoFullName}
-        compilerVersion={compilerVersion}
         errorCount={error ? 1 : 0}
         showingCompilerOutput={showCompilerOutput}
         compileMode={compileMode}
@@ -223,7 +216,6 @@ export function EditorLayout({ projectId, onBack }: Props) {
         onExportPdf={handleExportPdf}
         exportingPdf={exportingPdf}
         onGitHub={handleToggleGitHub}
-        onVersionChange={setCompilerVersion}
         onCompilerOutput={handleToggleCompilerOutput}
         onCompileModeChange={setCompileMode}
         onCompile={triggerCompile}
@@ -254,16 +246,22 @@ export function EditorLayout({ projectId, onBack }: Props) {
                     />
                   )}
                 </div>
-                {/* Collaboration status + collapse */}
                 <div className="flex items-center justify-between border-t border-gray-800 px-3 py-2 text-xs text-gray-500">
-                  <span>
-                    <span
-                      className={`mr-1.5 inline-block h-2 w-2 rounded-full ${
-                        connected ? "bg-green-500" : "bg-gray-600"
-                      }`}
-                    />
-                    {connected ? `${peerCount} connected` : "Offline"}
-                  </span>
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-gray-600">Typst {TYPST_VERSION.label}</span>
+                    <span>
+                      <span
+                        className={`mr-1.5 inline-block h-2 w-2 rounded-full ${
+                          connected ? "bg-green-500" : "bg-gray-600"
+                        }`}
+                      />
+                      {connected
+                        ? peerCount > 1
+                          ? `${peerCount - 1} peer${peerCount - 1 !== 1 ? "s" : ""}`
+                          : "Connected"
+                        : "Offline"}
+                    </span>
+                  </div>
                   <button
                     onClick={() => setSidebarCollapsed(true)}
                     className="text-gray-600 hover:text-gray-300"
@@ -278,7 +276,6 @@ export function EditorLayout({ projectId, onBack }: Props) {
           </>
         )}
 
-        {/* Collapsed sidebar toggle */}
         {sidebarCollapsed && (
           <div className="flex flex-col items-center border-r border-gray-800 bg-gray-900 py-2">
             <button
