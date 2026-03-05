@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, startTransition } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   createTypstRenderer,
   type TypstRenderer,
@@ -6,31 +6,9 @@ import {
 import type { PageInfo } from "@myriaddreamin/typst.ts/dist/esm/internal.types.mjs";
 import type { FileEntry } from "@/lib/api";
 
-// Supported compiler versions
-export const TYPST_VERSIONS = [
-  { pkg: "0.7.0-rc2", label: "0.14" },
-  { pkg: "0.6.0", label: "0.13" },
-  { pkg: "0.5.4", label: "0.12" },
-  { pkg: "0.5.0", label: "0.11" },
-  { pkg: "0.4.1", label: "0.10" },
-] as const;
-
-const STORAGE_KEY = "typst-compiler-version";
-const DEFAULT_VERSION = TYPST_VERSIONS[0].pkg;
-
-export function getSelectedVersion(): string {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored && TYPST_VERSIONS.some((v) => v.pkg === stored)) return stored;
-  return DEFAULT_VERSION;
-}
-
-export function setSelectedVersion(pkg: string) {
-  localStorage.setItem(STORAGE_KEY, pkg);
-}
-
-function wasmUrl(pkg: string, name: string) {
-  return `https://cdn.jsdelivr.net/npm/@myriaddreamin/${name}@${pkg}/pkg/${name.replace(/-/g, "_")}_bg.wasm`;
-}
+// Version must match installed @myriaddreamin/typst-ts-* npm packages.
+// JS bindings are version-specific — WASM from other versions won't load.
+export const TYPST_VERSION = { pkg: "0.7.0-rc2", label: "0.14" } as const;
 
 export interface CompilerDiagnostic {
   severity: "error" | "warning";
@@ -38,19 +16,16 @@ export interface CompilerDiagnostic {
   timestamp: number;
 }
 
-export interface CompilerState {
-  error: string | null;
-  compiling: boolean;
-  diagnostics: CompilerDiagnostic[];
-  pages: PageInfo[];
-}
-
 // ---------------------------------------------------------------------------
 // Renderer cache — stays on main thread for canvas rendering
 // ---------------------------------------------------------------------------
+function wasmUrl(pkg: string, name: string) {
+  return `https://cdn.jsdelivr.net/npm/@myriaddreamin/${name}@${pkg}/pkg/${name.replace(/-/g, "_")}_bg.wasm`;
+}
+
 const rendererCache = new Map<string, Promise<TypstRenderer>>();
 
-async function getRenderer(version: string): Promise<TypstRenderer> {
+function getRenderer(version: string): Promise<TypstRenderer> {
   const cached = rendererCache.get(version);
   if (cached) return cached;
 
@@ -122,25 +97,23 @@ function resetWorker() {
 }
 
 // ---------------------------------------------------------------------------
-// Fixed 150ms debounce — compilation is in a worker so it never blocks typing
-// ---------------------------------------------------------------------------
-const DEBOUNCE_MS = 150;
+const DEBOUNCE_MS = 250;
 
 export function useTypstCompiler(
   projectId: string,
   activeFilePath: string | null,
   contentRef: { current: string | null },
   allFiles: FileEntry[],
-  version: string,
   mainFilePath?: string,
+  typingUntilRef?: { current: number },
 ) {
+  const version = TYPST_VERSION.pkg;
   const [error, setError] = useState<string | null>(null);
   const [compiling, setCompiling] = useState(false);
   const [diagnostics, setDiagnostics] = useState<CompilerDiagnostic[]>([]);
   const [pages, setPages] = useState<PageInfo[]>([]);
   const [artifactContent, setArtifactContent] = useState<Uint8Array | null>(null);
-  const [rendererReady, setRendererReady] = useState<TypstRenderer | null>(null);
-  const rendererSetRef = useRef(false);
+  const [renderer, setRenderer] = useState<TypstRenderer | null>(null);
 
   // Compile trigger — increment to request a new compilation
   const [compileSeq, setCompileSeq] = useState(0);
@@ -153,19 +126,12 @@ export function useTypstCompiler(
   const needsMountRef = useRef(true);
   const needsResetRef = useRef(true);
 
-  // contentRef is passed in from the parent — always has latest content
-  // without triggering re-renders (updated by handleChange directly)
-
   const activeFilePathRef = useRef(activeFilePath);
   activeFilePathRef.current = activeFilePath;
-
-  const versionRef = useRef(version);
-  versionRef.current = version;
 
   const allFilesRef = useRef(allFiles);
   allFilesRef.current = allFiles;
 
-  // Use the project's configured main file, or fall back to main.typ / first .typ
   const mainFile = useMemo(() => {
     if (mainFilePath) return mainFilePath;
     const main = allFiles.find((f) => f.path === "main.typ");
@@ -182,18 +148,17 @@ export function useTypstCompiler(
     needsMountRef.current = true;
   }, [allFiles]);
 
-  // Recompile when version or mainFile changes; fully reset compiler + renderer
+  // Recompile when mainFile changes; fully reset compiler + renderer
   useEffect(() => {
     resetWorker();
     rendererCache.clear();
-    rendererSetRef.current = false;
-    setRendererReady(null);
+    setRenderer(null);
     needsMountRef.current = true;
     needsResetRef.current = true;
     setCompileSeq((s) => s + 1);
-  }, [version, mainFile]);
+  }, [mainFile]);
 
-  // Compile mutex: prevents overlapping compile+render cycles
+  // Compile mutex: prevents overlapping compile cycles
   const compileGuardRef = useRef({ busy: false, pending: false });
 
   // Compile via worker — ONLY triggered by compileSeq changes
@@ -205,24 +170,20 @@ export function useTypstCompiler(
     }
 
     timerRef.current = setTimeout(async () => {
-      // If a compile is already running, mark pending and bail
       if (compileGuardRef.current.busy) {
         compileGuardRef.current.pending = true;
         return;
       }
       compileGuardRef.current.busy = true;
-      // startTransition: makes "Compiling..." indicator non-urgent so React
-      // won't block CodeMirror's DOM paint to show the button change.
-      startTransition(() => setCompiling(true));
+      setCompiling(true);
 
       try {
         const needsMount = needsMountRef.current;
         const needsReset = needsResetRef.current;
 
-        // Send compile request to the Web Worker (runs off main thread)
         const result = await sendToWorker({
           type: "compile",
-          version: versionRef.current,
+          version: version,
           projectId,
           files: allFilesRef.current.map((f) => ({
             path: f.path,
@@ -236,66 +197,51 @@ export function useTypstCompiler(
           format: 0, // vector
         });
 
-        // Update flags after successful worker round-trip —
-        // the worker has mounted/reset regardless of whether we use the result
         if (needsMount) needsMountRef.current = false;
         if (needsReset) needsResetRef.current = false;
 
-        // If the user typed more while the worker was compiling, this result
-        // is already stale. Skip the expensive main-thread work (page info
-        // WASM + React state updates that trigger PreviewPanel canvas rendering)
+        // If the user typed more while compiling, this result is stale.
+        // Skip the expensive main-thread WASM work (page info + render)
         // and let the next compile produce a fresh result.
         if (compileGuardRef.current.pending) return;
 
-        if (result.success && result.result) {
-          // --- Phase 1: async work (no state updates yet) ---
-          // Get renderer (cached after first call, ~0ms; first call loads WASM)
-          const renderer = await getRenderer(versionRef.current);
+        // Wait for the user to stop typing before doing expensive main-thread
+        // WASM work (page info extraction + canvas rendering via state update).
+        // This keeps the event loop free while the user is actively typing.
+        if (typingUntilRef) {
+          while (Date.now() < typingUntilRef.current) {
+            await new Promise(r => setTimeout(r, 50));
+            // If a new compile was requested while waiting, bail
+            if (compileGuardRef.current.pending) return;
+          }
+        }
 
-          // Get page info (~7ms WASM, no DOM)
+        if (result.success && result.result) {
+          const r = await getRenderer(version);
+
           let newPages: PageInfo[] | null = null;
-          await renderer.runWithSession(
-            {
-              format: "vector" as any,
-              artifactContent: result.result,
-            },
-            async (session) => {
-              newPages = session.retrievePagesInfo();
-            }
+          await r.runWithSession(
+            { format: "vector" as any, artifactContent: result.result },
+            async (session) => { newPages = session.retrievePagesInfo(); }
           );
 
-          // Check again after async work — user may have typed more
-          if (compileGuardRef.current.pending) return;
-
-          // --- Phase 2: low-priority transition for preview state ---
-          // startTransition tells React these updates are non-urgent.
-          // If a keystroke (urgent) arrives mid-render, React pauses this
-          // transition, processes the keystroke immediately, then resumes.
-          // Combined with React.memo on EditorPanel, typing is completely
-          // decoupled from preview rendering.
-          startTransition(() => {
-            setArtifactContent(result.result);
-            if (!rendererSetRef.current) {
-              setRendererReady(renderer);
-              rendererSetRef.current = true;
-            }
-            if (newPages) {
-              setPages((prev) => {
-                if (
-                  prev.length === newPages!.length &&
-                  prev.every(
-                    (p, i) =>
-                      p.width === newPages![i].width &&
-                      p.height === newPages![i].height
-                  )
-                ) {
-                  return prev;
-                }
-                return newPages!;
-              });
-            }
-            setError(null);
-          });
+          setArtifactContent(result.result);
+          setRenderer(r);
+          if (newPages) {
+            setPages((prev) => {
+              if (
+                prev.length === newPages!.length &&
+                prev.every((p, i) =>
+                  p.width === newPages![i].width &&
+                  p.height === newPages![i].height
+                )
+              ) {
+                return prev;
+              }
+              return newPages!;
+            });
+          }
+          setError(null);
         } else {
           // Compilation failed — show diagnostics
           const diags = result.diagnostics ?? [];
@@ -322,7 +268,6 @@ export function useTypstCompiler(
         }
       } catch (e: any) {
         const message = e?.message || String(e);
-        // Don't report "Worker reset" as an error — it's expected during version changes
         if (message !== "Worker reset") {
           setError(message);
           setDiagnostics((prev) => [
@@ -331,10 +276,9 @@ export function useTypstCompiler(
           ]);
         }
       } finally {
-        startTransition(() => setCompiling(false));
+        setCompiling(false);
         compileGuardRef.current.busy = false;
 
-        // If another compile was requested while we were busy, trigger it
         if (compileGuardRef.current.pending) {
           compileGuardRef.current.pending = false;
           setCompileSeq((s) => s + 1);
@@ -357,7 +301,7 @@ export function useTypstCompiler(
     clearDiagnostics,
     pages,
     artifactContent,
-    renderer: rendererReady,
+    renderer,
     triggerCompile,
   };
 }
@@ -370,11 +314,10 @@ export async function exportPdf(
   allFiles: FileEntry[],
   mainFile: string,
   filename: string,
-  version: string
 ) {
   const result = await sendToWorker({
     type: "compile",
-    version,
+    version: TYPST_VERSION.pkg,
     projectId,
     files: allFiles.map((f) => ({
       path: f.path,
