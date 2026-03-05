@@ -95,9 +95,14 @@ export function setupCollaboration(
   return state;
 }
 
+// Debounced send: batch rapid keystrokes into one WebSocket message
+let collabSendTimer: ReturnType<typeof setTimeout> | null = null;
+
 /**
  * Apply local changes using CodeMirror's ChangeSet for minimal CRDT diffs.
  * Instead of delete-all/insert-all, we apply only the changed ranges.
+ * The state encoding + WebSocket send is debounced (50ms) so rapid
+ * keystrokes are batched into a single update.
  */
 export function applyLocalChange(
   state: CollabState,
@@ -123,14 +128,18 @@ export function applyLocalChange(
     });
   });
 
-  // Send update to server
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    const update = Y.encodeStateAsUpdate(doc);
-    ws.send(
-      JSON.stringify({
-        type: "update",
-        data: Array.from(update),
-      })
-    );
-  }
+  // Debounce: batch multiple keystrokes into one WebSocket send
+  if (collabSendTimer) clearTimeout(collabSendTimer);
+  collabSendTimer = setTimeout(() => {
+    collabSendTimer = null;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      const update = Y.encodeStateAsUpdate(doc);
+      ws.send(
+        JSON.stringify({
+          type: "update",
+          data: Array.from(update),
+        })
+      );
+    }
+  }, 50);
 }

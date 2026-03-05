@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   TYPST_VERSIONS,
   setSelectedVersion,
@@ -10,6 +11,8 @@ interface Props {
   compilerVersion: string;
   errorCount: number;
   showingCompilerOutput: boolean;
+  compileMode: 'live' | 'manual';
+  compiling: boolean;
   onBack: () => void;
   onShare: () => void;
   onGitHub: () => void;
@@ -17,15 +20,19 @@ interface Props {
   exportingPdf: boolean;
   onVersionChange: (version: string) => void;
   onCompilerOutput: () => void;
+  onCompileModeChange: (mode: 'live' | 'manual') => void;
+  onCompile: () => void;
 }
 
-export function Toolbar({
+export const Toolbar = memo(function Toolbar({
   projectName,
   saving,
   githubLinked,
   compilerVersion,
   errorCount,
   showingCompilerOutput,
+  compileMode,
+  compiling,
   onBack,
   onShare,
   onGitHub,
@@ -33,6 +40,8 @@ export function Toolbar({
   exportingPdf,
   onVersionChange,
   onCompilerOutput,
+  onCompileModeChange,
+  onCompile,
 }: Props) {
   const handleVersionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newVersion = e.target.value;
@@ -54,6 +63,28 @@ export function Toolbar({
         {saving && (
           <span className="text-xs text-gray-500">Saving...</span>
         )}
+        <span className="text-gray-600">|</span>
+        <div className="flex items-center gap-1.5">
+          {compileMode === 'manual' && (
+            <button
+              onClick={onCompile}
+              disabled={compiling}
+              className="rounded bg-green-700 px-3 py-1 text-sm text-white hover:bg-green-600 disabled:opacity-50"
+              title={`Compile (${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+Enter)`}
+            >
+              {compiling ? "Compiling..." : "Compile"}
+            </button>
+          )}
+          <select
+            value={compileMode}
+            onChange={(e) => onCompileModeChange(e.target.value as 'live' | 'manual')}
+            className="rounded bg-gray-800 px-2 py-1 text-xs text-gray-300 border border-gray-700 cursor-pointer hover:bg-gray-700"
+            title="Compile mode"
+          >
+            <option value="manual">Manual</option>
+            <option value="live">Live</option>
+          </select>
+        </div>
       </div>
       <div className="flex items-center gap-2">
         <select
@@ -111,4 +142,4 @@ export function Toolbar({
       </div>
     </header>
   );
-}
+});

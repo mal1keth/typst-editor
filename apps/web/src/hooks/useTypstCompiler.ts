@@ -1,22 +1,17 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, startTransition } from "react";
 import {
-  createTypstCompiler,
   createTypstRenderer,
-  MemoryAccessModel,
-  FetchPackageRegistry,
-  initOptions,
-  type TypstCompiler,
   type TypstRenderer,
-  type RenderSession,
 } from "@myriaddreamin/typst.ts";
 import type { PageInfo } from "@myriaddreamin/typst.ts/dist/esm/internal.types.mjs";
 import type { FileEntry } from "@/lib/api";
 
 // Supported compiler versions
 export const TYPST_VERSIONS = [
-  { pkg: "0.7.0-rc2", label: "0.14 (latest)" },
+  { pkg: "0.7.0-rc2", label: "0.14" },
   { pkg: "0.6.0", label: "0.13" },
   { pkg: "0.5.4", label: "0.12" },
+  { pkg: "0.5.0", label: "0.11" },
   { pkg: "0.4.1", label: "0.10" },
 ] as const;
 
@@ -43,101 +38,6 @@ export interface CompilerDiagnostic {
   timestamp: number;
 }
 
-interface CompilerInstance {
-  compiler: TypstCompiler;
-  renderer: TypstRenderer;
-}
-
-// Cache compiler+renderer instances by version
-const instanceCache = new Map<string, Promise<CompilerInstance>>();
-
-async function getCompilerInstance(version: string): Promise<CompilerInstance> {
-  const cached = instanceCache.get(version);
-  if (cached) return cached;
-
-  const promise = (async () => {
-    const accessModel = new MemoryAccessModel();
-    const packageRegistry = new FetchPackageRegistry(accessModel);
-
-    const compiler = createTypstCompiler();
-    await compiler.init({
-      getModule: () => wasmUrl(version, "typst-ts-web-compiler"),
-      beforeBuild: [
-        initOptions.withAccessModel(accessModel),
-        initOptions.withPackageRegistry(packageRegistry),
-      ],
-    });
-
-    const renderer = createTypstRenderer();
-    await renderer.init({
-      getModule: () => wasmUrl(version, "typst-ts-renderer"),
-    });
-
-    return { compiler, renderer };
-  })();
-
-  instanceCache.set(version, promise);
-  return promise;
-}
-
-// Encode file path for URL: encode each segment separately to preserve slashes
-function encodeFilePath(path: string): string {
-  return path.split("/").map(encodeURIComponent).join("/");
-}
-
-// Fetch file content from the API
-async function fetchFileContent(
-  projectId: string,
-  path: string
-): Promise<string | null> {
-  try {
-    const res = await fetch(`/api/projects/${projectId}/files/${encodeFilePath(path)}`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.content ?? null;
-  } catch {
-    return null;
-  }
-}
-
-const BINARY_EXTENSIONS = new Set([
-  ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg",
-  ".pdf", ".ttf", ".otf", ".woff", ".woff2",
-]);
-
-function isBinaryFile(path: string): boolean {
-  const ext = path.substring(path.lastIndexOf(".")).toLowerCase();
-  return BINARY_EXTENSIONS.has(ext);
-}
-
-// Fetch binary file content
-async function fetchBinaryContent(
-  projectId: string,
-  path: string
-): Promise<Uint8Array | null> {
-  try {
-    const res = await fetch(`/api/projects/${projectId}/files/${encodeFilePath(path)}`);
-    if (!res.ok) return null;
-    const buf = await res.arrayBuffer();
-    return new Uint8Array(buf);
-  } catch {
-    return null;
-  }
-}
-
-// Adaptive debounce based on file size and last compile time
-function getDebounceMs(contentLength: number, lastCompileMs: number): number {
-  let base: number;
-  if (contentLength < 1000) base = 150;
-  else if (contentLength < 10000) base = 300;
-  else base = 500;
-
-  if (lastCompileMs > 500) {
-    return Math.max(base, Math.min(lastCompileMs * 1.5, 2000));
-  }
-  return base;
-}
-
 export interface CompilerState {
   error: string | null;
   compiling: boolean;
@@ -145,19 +45,102 @@ export interface CompilerState {
   pages: PageInfo[];
 }
 
+// ---------------------------------------------------------------------------
+// Renderer cache — stays on main thread for canvas rendering
+// ---------------------------------------------------------------------------
+const rendererCache = new Map<string, Promise<TypstRenderer>>();
+
+async function getRenderer(version: string): Promise<TypstRenderer> {
+  const cached = rendererCache.get(version);
+  if (cached) return cached;
+
+  const promise = (async () => {
+    const renderer = createTypstRenderer();
+    await renderer.init({
+      getModule: () => wasmUrl(version, "typst-ts-renderer"),
+    });
+    return renderer;
+  })();
+
+  rendererCache.set(version, promise);
+  return promise;
+}
+
+// ---------------------------------------------------------------------------
+// Web Worker client — compilation runs off the main thread
+// ---------------------------------------------------------------------------
+let workerInstance: Worker | null = null;
+let workerPending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+let workerNextId = 0;
+
+function getWorker(): Worker {
+  if (workerInstance) return workerInstance;
+
+  workerInstance = new Worker(
+    new URL("../workers/typst-compiler.worker.ts", import.meta.url),
+    { type: "module" }
+  );
+
+  workerInstance.onmessage = (e) => {
+    const { id, ...data } = e.data;
+    const handler = workerPending.get(id);
+    if (handler) {
+      workerPending.delete(id);
+      if (data.type === "error") {
+        handler.reject(new Error(data.error));
+      } else {
+        handler.resolve(data);
+      }
+    }
+  };
+
+  workerInstance.onerror = (e) => {
+    console.error("Compiler worker error:", e);
+  };
+
+  return workerInstance;
+}
+
+function sendToWorker(msg: Record<string, any>): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const id = workerNextId++;
+    workerPending.set(id, { resolve, reject });
+    getWorker().postMessage({ id, ...msg });
+  });
+}
+
+function resetWorker() {
+  if (workerInstance) {
+    workerInstance.terminate();
+    workerInstance = null;
+  }
+  for (const { reject } of workerPending.values()) {
+    reject(new Error("Worker reset"));
+  }
+  workerPending.clear();
+  workerNextId = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Fixed 150ms debounce — compilation is in a worker so it never blocks typing
+// ---------------------------------------------------------------------------
+const DEBOUNCE_MS = 150;
+
 export function useTypstCompiler(
   projectId: string,
   activeFilePath: string | null,
-  activeFileContent: string | null,
+  contentRef: { current: string | null },
   allFiles: FileEntry[],
   version: string,
-  containerRef: React.RefObject<HTMLDivElement | null>,
   mainFilePath?: string,
 ) {
   const [error, setError] = useState<string | null>(null);
   const [compiling, setCompiling] = useState(false);
   const [diagnostics, setDiagnostics] = useState<CompilerDiagnostic[]>([]);
   const [pages, setPages] = useState<PageInfo[]>([]);
+  const [artifactContent, setArtifactContent] = useState<Uint8Array | null>(null);
+  const [rendererReady, setRendererReady] = useState<TypstRenderer | null>(null);
+  const rendererSetRef = useRef(false);
 
   // Compile trigger — increment to request a new compilation
   const [compileSeq, setCompileSeq] = useState(0);
@@ -167,23 +150,20 @@ export function useTypstCompiler(
   }, []);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastCompileMsRef = useRef(300);
-  const instanceRef = useRef<CompilerInstance | null>(null);
-  const vfsMountedRef = useRef(false);
-  const mountedFilesRef = useRef(new Set<string>());
-  const mainFilePathRef = useRef<string | null>(null);
-  // Track whether compiler needs reset before next compile (after mount or mainFile change)
+  const needsMountRef = useRef(true);
   const needsResetRef = useRef(true);
 
-  // Use refs so the compile effect only triggers from compileSeq
-  const contentRef = useRef(activeFileContent);
-  contentRef.current = activeFileContent;
+  // contentRef is passed in from the parent — always has latest content
+  // without triggering re-renders (updated by handleChange directly)
 
   const activeFilePathRef = useRef(activeFilePath);
   activeFilePathRef.current = activeFilePath;
 
   const versionRef = useRef(version);
   versionRef.current = version;
+
+  const allFilesRef = useRef(allFiles);
+  allFilesRef.current = allFiles;
 
   // Use the project's configured main file, or fall back to main.typ / first .typ
   const mainFile = useMemo(() => {
@@ -194,58 +174,21 @@ export function useTypstCompiler(
     return first?.path ?? "main.typ";
   }, [mainFilePath, allFiles]);
 
-  // Mount all project files into the compiler VFS
-  const mountAllFiles = useCallback(
-    async (compiler: TypstCompiler) => {
-      if (vfsMountedRef.current) return;
-
-      const newMounted = new Set<string>();
-
-      for (const file of allFiles) {
-        if (file.isDirectory) continue;
-
-        const filePath = "/" + file.path;
-
-        if (isBinaryFile(file.path)) {
-          const content = await fetchBinaryContent(projectId, file.path);
-          if (content) {
-            compiler.mapShadow(filePath, content);
-            newMounted.add(file.path);
-          }
-        } else {
-          const content = await fetchFileContent(projectId, file.path);
-          if (content !== null) {
-            compiler.addSource(filePath, content);
-            newMounted.add(file.path);
-          }
-        }
-      }
-
-      mountedFilesRef.current = newMounted;
-      vfsMountedRef.current = true;
-      // addSource() accumulates internal state; need reset before first compile
-      needsResetRef.current = true;
-    },
-    [projectId, allFiles]
-  );
-
-  // Keep refs for values used inside the compile effect (so deps stay minimal)
-  const mountAllFilesRef = useRef(mountAllFiles);
-  mountAllFilesRef.current = mountAllFiles;
   const mainFileRef = useRef(mainFile);
   mainFileRef.current = mainFile;
 
-  // Reset VFS when project files change
+  // Reset VFS mount flag when project files change
   useEffect(() => {
-    vfsMountedRef.current = false;
+    needsMountRef.current = true;
   }, [allFiles]);
 
-  // Recompile when version or mainFile changes; fully reset compiler state
+  // Recompile when version or mainFile changes; fully reset compiler + renderer
   useEffect(() => {
-    // Clear cached instances to avoid stale comemo caches (e.g. false cyclic imports)
-    instanceCache.clear();
-    instanceRef.current = null;
-    vfsMountedRef.current = false;
+    resetWorker();
+    rendererCache.clear();
+    rendererSetRef.current = false;
+    setRendererReady(null);
+    needsMountRef.current = true;
     needsResetRef.current = true;
     setCompileSeq((s) => s + 1);
   }, [version, mainFile]);
@@ -253,19 +196,13 @@ export function useTypstCompiler(
   // Compile mutex: prevents overlapping compile+render cycles
   const compileGuardRef = useRef({ busy: false, pending: false });
 
-  // Compile and render — ONLY triggered by compileSeq changes
+  // Compile via worker — ONLY triggered by compileSeq changes
   useEffect(() => {
     if (compileSeq === 0) return;
 
     if (timerRef.current) {
       clearTimeout(timerRef.current);
     }
-
-    const content = contentRef.current;
-    const debounceMs = getDebounceMs(
-      content?.length ?? 0,
-      lastCompileMsRef.current
-    );
 
     timerRef.current = setTimeout(async () => {
       // If a compile is already running, mark pending and bail
@@ -274,66 +211,101 @@ export function useTypstCompiler(
         return;
       }
       compileGuardRef.current.busy = true;
-      setCompiling(true);
-      const startTime = performance.now();
+      // startTransition: makes "Compiling..." indicator non-urgent so React
+      // won't block CodeMirror's DOM paint to show the button change.
+      startTransition(() => setCompiling(true));
 
       try {
-        // Get or create compiler instance
-        if (!instanceRef.current) {
-          instanceRef.current = await getCompilerInstance(versionRef.current);
-        }
+        const needsMount = needsMountRef.current;
+        const needsReset = needsResetRef.current;
 
-        const { compiler, renderer } = instanceRef.current;
-
-        // Mount all files on first compile
-        const justMounted = !vfsMountedRef.current;
-        await mountAllFilesRef.current(compiler);
-
-        // Update only the changed file (preserves comemo caches for all other files).
-        // Skip if files were just mounted — the file is already up-to-date in the VFS,
-        // and double-calling addSource() for the same path triggers a WASM bug in
-        // typst.ts 0.7.0-rc2 where labels get registered twice (duplicate label errors).
-        if (!justMounted) {
-          const currentPath = activeFilePathRef.current;
-          const currentContent = contentRef.current;
-          if (currentPath && currentContent !== null) {
-            compiler.addSource("/" + currentPath, currentContent);
-          }
-        }
-
-        // Reset compiler state after initial file mount to clear any accumulated
-        // tracking state from addSource() calls. Preserves incremental compilation
-        // on subsequent edits (only the changed file is re-added via addSource).
-        if (needsResetRef.current) {
-          await compiler.reset();
-          needsResetRef.current = false;
-        }
-
-        // Compile to vector format.
-        // Use diagnostics: "none" to match the snippet API behavior.
-        // typst.ts 0.7.0-rc2 treats some warnings (e.g. duplicate labels from @ref)
-        // as hard errors when diagnostics are enabled, preventing output generation.
-        const compileResult = await compiler.compile({
-          mainFilePath: "/" + mainFileRef.current,
-          root: "/",
-          format: 0, // CompileFormatEnum.vector
-          diagnostics: "none",
+        // Send compile request to the Web Worker (runs off main thread)
+        const result = await sendToWorker({
+          type: "compile",
+          version: versionRef.current,
+          projectId,
+          files: allFilesRef.current.map((f) => ({
+            path: f.path,
+            isDirectory: f.isDirectory,
+          })),
+          needsMount,
+          activeFilePath: activeFilePathRef.current,
+          activeFileContent: contentRef.current,
+          needsReset: needsReset || needsMount,
+          mainFilePath: mainFileRef.current,
+          format: 0, // vector
         });
 
-        if (!compileResult.result) {
-          // Primary compile failed — run a diagnostic compile to get error details
-          const diagResult = await compiler.compile({
-            mainFilePath: "/" + mainFileRef.current,
-            root: "/",
-            format: 0,
-            diagnostics: "full",
-          });
+        // Update flags after successful worker round-trip —
+        // the worker has mounted/reset regardless of whether we use the result
+        if (needsMount) needsMountRef.current = false;
+        if (needsReset) needsResetRef.current = false;
 
-          const diags = diagResult.diagnostics ?? compileResult.diagnostics ?? [];
+        // If the user typed more while the worker was compiling, this result
+        // is already stale. Skip the expensive main-thread work (page info
+        // WASM + React state updates that trigger PreviewPanel canvas rendering)
+        // and let the next compile produce a fresh result.
+        if (compileGuardRef.current.pending) return;
+
+        if (result.success && result.result) {
+          // --- Phase 1: async work (no state updates yet) ---
+          // Get renderer (cached after first call, ~0ms; first call loads WASM)
+          const renderer = await getRenderer(versionRef.current);
+
+          // Get page info (~7ms WASM, no DOM)
+          let newPages: PageInfo[] | null = null;
+          await renderer.runWithSession(
+            {
+              format: "vector" as any,
+              artifactContent: result.result,
+            },
+            async (session) => {
+              newPages = session.retrievePagesInfo();
+            }
+          );
+
+          // Check again after async work — user may have typed more
+          if (compileGuardRef.current.pending) return;
+
+          // --- Phase 2: low-priority transition for preview state ---
+          // startTransition tells React these updates are non-urgent.
+          // If a keystroke (urgent) arrives mid-render, React pauses this
+          // transition, processes the keystroke immediately, then resumes.
+          // Combined with React.memo on EditorPanel, typing is completely
+          // decoupled from preview rendering.
+          startTransition(() => {
+            setArtifactContent(result.result);
+            if (!rendererSetRef.current) {
+              setRendererReady(renderer);
+              rendererSetRef.current = true;
+            }
+            if (newPages) {
+              setPages((prev) => {
+                if (
+                  prev.length === newPages!.length &&
+                  prev.every(
+                    (p, i) =>
+                      p.width === newPages![i].width &&
+                      p.height === newPages![i].height
+                  )
+                ) {
+                  return prev;
+                }
+                return newPages!;
+              });
+            }
+            setError(null);
+          });
+        } else {
+          // Compilation failed — show diagnostics
+          const diags = result.diagnostics ?? [];
           if (diags.length > 0) {
             const newDiags: CompilerDiagnostic[] = diags.map(
               (d: any) => ({
-                severity: d.severity === "error" ? "error" as const : "warning" as const,
+                severity:
+                  d.severity === "error"
+                    ? ("error" as const)
+                    : ("warning" as const),
                 message: `${d.path}:${d.range}: ${d.message}`,
                 timestamp: Date.now(),
               })
@@ -347,45 +319,19 @@ export function useTypstCompiler(
               .map((d: any) => `${d.path}:${d.range}: ${d.message}`)
               .join("\n") || "Compilation failed";
           setError(errMsg);
-          return;
         }
-
-        // Render: clear container, then render new content
-        const container = containerRef.current;
-        if (container) {
-          container.innerHTML = "";
-
-          await renderer.renderToCanvas({
-            container,
-            format: "vector" as any,
-            artifactContent: compileResult.result,
-            backgroundColor: "#ffffff",
-            pixelPerPt: 2,
-          } as any);
-
-          // Get page info for zoom controls
-          await renderer.runWithSession(
-            {
-              format: "vector" as any,
-              artifactContent: compileResult.result,
-            },
-            async (session) => {
-              setPages(session.retrievePagesInfo());
-            }
-          );
-        }
-
-        setError(null);
       } catch (e: any) {
         const message = e?.message || String(e);
-        setError(message);
-        setDiagnostics((prev) => [
-          ...prev.slice(-49),
-          { severity: "error" as const, message, timestamp: Date.now() },
-        ]);
+        // Don't report "Worker reset" as an error — it's expected during version changes
+        if (message !== "Worker reset") {
+          setError(message);
+          setDiagnostics((prev) => [
+            ...prev.slice(-49),
+            { severity: "error" as const, message, timestamp: Date.now() },
+          ]);
+        }
       } finally {
-        lastCompileMsRef.current = performance.now() - startTime;
-        setCompiling(false);
+        startTransition(() => setCompiling(false));
         compileGuardRef.current.busy = false;
 
         // If another compile was requested while we were busy, trigger it
@@ -394,7 +340,7 @@ export function useTypstCompiler(
           setCompileSeq((s) => s + 1);
         }
       }
-    }, debounceMs);
+    }, DEBOUNCE_MS);
 
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
@@ -404,9 +350,21 @@ export function useTypstCompiler(
 
   const clearDiagnostics = useCallback(() => setDiagnostics([]), []);
 
-  return { error, compiling, diagnostics, clearDiagnostics, pages, triggerCompile };
+  return {
+    error,
+    compiling,
+    diagnostics,
+    clearDiagnostics,
+    pages,
+    artifactContent,
+    renderer: rendererReady,
+    triggerCompile,
+  };
 }
 
+// ---------------------------------------------------------------------------
+// PDF export — uses the same worker for compilation
+// ---------------------------------------------------------------------------
 export async function exportPdf(
   projectId: string,
   allFiles: FileEntry[],
@@ -414,34 +372,27 @@ export async function exportPdf(
   filename: string,
   version: string
 ) {
-  const { compiler } = await getCompilerInstance(version);
-
-  // Mount all files
-  for (const file of allFiles) {
-    if (file.isDirectory) continue;
-    if (isBinaryFile(file.path)) {
-      const content = await fetchBinaryContent(projectId, file.path);
-      if (content) compiler.mapShadow("/" + file.path, content);
-    } else {
-      const content = await fetchFileContent(projectId, file.path);
-      if (content !== null) compiler.addSource("/" + file.path, content);
-    }
-  }
-
-  // Use diagnostics: "none" to avoid false positives (e.g. duplicate label errors)
-  // in typst.ts 0.7.0-rc2 that would prevent output generation.
-  const result = await compiler.compile({
-    mainFilePath: "/" + mainFile,
-    root: "/",
-    format: 1, // CompileFormatEnum.pdf
-    diagnostics: "none",
+  const result = await sendToWorker({
+    type: "compile",
+    version,
+    projectId,
+    files: allFiles.map((f) => ({
+      path: f.path,
+      isDirectory: f.isDirectory,
+    })),
+    needsMount: true,
+    activeFilePath: null,
+    activeFileContent: null,
+    needsReset: true,
+    mainFilePath: mainFile,
+    format: 1, // PDF
   });
 
-  if (!result.result) {
+  if (!result.success || !result.result) {
     throw new Error("PDF compilation failed");
   }
 
-  const blob = new Blob([new Uint8Array(result.result)], { type: "application/pdf" });
+  const blob = new Blob([result.result], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
