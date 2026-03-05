@@ -129,9 +129,6 @@ export function useTypstCompiler(
   const activeFilePathRef = useRef(activeFilePath);
   activeFilePathRef.current = activeFilePath;
 
-  const allFilesRef = useRef(allFiles);
-  allFilesRef.current = allFiles;
-
   const mainFile = useMemo(() => {
     if (mainFilePath) return mainFilePath;
     const main = allFiles.find((f) => f.path === "main.typ");
@@ -185,10 +182,6 @@ export function useTypstCompiler(
           type: "compile",
           version: version,
           projectId,
-          files: allFilesRef.current.map((f) => ({
-            path: f.path,
-            isDirectory: f.isDirectory,
-          })),
           needsMount,
           activeFilePath: activeFilePathRef.current,
           activeFileContent: contentRef.current,
@@ -311,7 +304,6 @@ export function useTypstCompiler(
 // ---------------------------------------------------------------------------
 export async function exportPdf(
   projectId: string,
-  allFiles: FileEntry[],
   mainFile: string,
   filename: string,
 ) {
@@ -319,10 +311,6 @@ export async function exportPdf(
     type: "compile",
     version: TYPST_VERSION.pkg,
     projectId,
-    files: allFiles.map((f) => ({
-      path: f.path,
-      isDirectory: f.isDirectory,
-    })),
     needsMount: true,
     activeFilePath: null,
     activeFileContent: null,
