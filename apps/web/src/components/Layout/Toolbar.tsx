@@ -1,14 +1,9 @@
 import { memo } from "react";
-import {
-  TYPST_VERSIONS,
-  setSelectedVersion,
-} from "@/hooks/useTypstCompiler";
 
 interface Props {
   projectName: string;
   saving: boolean;
   githubLinked: boolean;
-  compilerVersion: string;
   errorCount: number;
   showingCompilerOutput: boolean;
   compileMode: 'live' | 'manual';
@@ -18,7 +13,6 @@ interface Props {
   onGitHub: () => void;
   onExportPdf: () => void;
   exportingPdf: boolean;
-  onVersionChange: (version: string) => void;
   onCompilerOutput: () => void;
   onCompileModeChange: (mode: 'live' | 'manual') => void;
   onCompile: () => void;
@@ -28,7 +22,6 @@ export const Toolbar = memo(function Toolbar({
   projectName,
   saving,
   githubLinked,
-  compilerVersion,
   errorCount,
   showingCompilerOutput,
   compileMode,
@@ -38,17 +31,10 @@ export const Toolbar = memo(function Toolbar({
   onGitHub,
   onExportPdf,
   exportingPdf,
-  onVersionChange,
   onCompilerOutput,
   onCompileModeChange,
   onCompile,
 }: Props) {
-  const handleVersionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newVersion = e.target.value;
-    setSelectedVersion(newVersion);
-    onVersionChange(newVersion);
-  };
-
   return (
     <header className="flex h-12 items-center justify-between border-b border-gray-800 bg-gray-900 px-4">
       <div className="flex items-center gap-3">
@@ -87,18 +73,6 @@ export const Toolbar = memo(function Toolbar({
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <select
-          value={compilerVersion}
-          onChange={handleVersionChange}
-          className="rounded bg-gray-800 px-2 py-1.5 text-sm text-gray-300 border border-gray-700 hover:bg-gray-700 cursor-pointer"
-          title="Typst compiler version"
-        >
-          {TYPST_VERSIONS.map((v) => (
-            <option key={v.pkg} value={v.pkg}>
-              Typst {v.label}
-            </option>
-          ))}
-        </select>
         <button
           onClick={onCompilerOutput}
           className={`relative rounded px-3 py-1.5 text-sm ${

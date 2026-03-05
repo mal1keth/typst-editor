@@ -1,7 +1,6 @@
 import { useRef, useState, useCallback, useEffect, useMemo, memo } from "react";
 import type { TypstRenderer } from "@myriaddreamin/typst.ts";
 import type { PageInfo } from "@myriaddreamin/typst.ts/dist/esm/internal.types.mjs";
-import { PageRenderer } from "./PageRenderer";
 
 interface PreviewPanelProps {
   error: string | null;
@@ -15,9 +14,6 @@ const PIXEL_PER_PT = 2;
 const PAGE_GAP = 8;
 const PADDING = 16;
 
-// React.memo: props (error, compiling, pages, artifactContent, renderer)
-// don't change during typing — only when a compile result arrives.
-// Prevents wasted re-renders from parent re-rendering on every keystroke.
 export const PreviewPanel = memo(function PreviewPanel({
   error,
   compiling,
@@ -30,16 +26,8 @@ export const PreviewPanel = memo(function PreviewPanel({
   const [containerWidth, setContainerWidth] = useState(0);
   const [activePageIndex, setActivePageIndex] = useState(0);
 
-  // Refs to page placeholder divs (set via callback refs)
+  // Refs to page container divs
   const pageRefsMap = useRef<Map<number, HTMLDivElement>>(new Map());
-  // Track what's currently rendered to avoid re-rendering unchanged pages
-  const renderedRef = useRef<Map<number, number>>(new Map()); // pageIndex → artifactId
-  const artifactIdRef = useRef(0);
-
-  // Increment artifact ID when artifact changes
-  useEffect(() => {
-    if (artifactContent) artifactIdRef.current += 1;
-  }, [artifactContent]);
 
   // Track container width
   useEffect(() => {
@@ -54,7 +42,7 @@ export const PreviewPanel = memo(function PreviewPanel({
     return () => observer.disconnect();
   }, []);
 
-  // Page layout (cumulative heights)
+  // Page layout (cumulative heights for scroll positioning)
   const pageLayout = useMemo(() => {
     const layout: { top: number; height: number }[] = [];
     let cumTop = PADDING;
@@ -76,10 +64,14 @@ export const PreviewPanel = memo(function PreviewPanel({
   }, [pageLayout]);
 
   // Find active page from scroll position
+  // pageLayout values are in unzoomed coordinates; scrollTop is in zoomed
+  // screen pixels (CSS zoom on the child affects the scroll container's range).
+  // Divide scroll values by zoom to convert to unzoomed content coordinates.
   const updateActivePage = useCallback(() => {
     const el = scrollRef.current;
     if (!el || pageLayout.length === 0) return;
-    const center = el.scrollTop + el.clientHeight / 2;
+    const z = zoom || 1;
+    const center = (el.scrollTop + el.clientHeight / 2) / z;
     let active = 0;
     for (let i = 0; i < pageLayout.length; i++) {
       const { top, height } = pageLayout[i];
@@ -88,7 +80,7 @@ export const PreviewPanel = memo(function PreviewPanel({
       active = i;
     }
     setActivePageIndex(active);
-  }, [pageLayout]);
+  }, [pageLayout, zoom]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -109,34 +101,22 @@ export const PreviewPanel = memo(function PreviewPanel({
     return set;
   }, [activePageIndex, pages.length]);
 
-  // === RENDER VISIBLE PAGES ===
-  // Single effect that renders only the 3 visible pages.
-  // Cleans up canvases for pages that are no longer visible.
+  // Render visible pages on main thread
   useEffect(() => {
     if (!renderer || !artifactContent || containerWidth <= 0 || pages.length === 0) return;
 
-    const currentArtifactId = artifactIdRef.current;
     let cancelled = false;
 
     // Clean up non-visible pages
-    for (const [idx] of renderedRef.current) {
+    for (const [idx] of pageRefsMap.current) {
       if (!visibleSet.has(idx)) {
         const div = pageRefsMap.current.get(idx);
         if (div) div.innerHTML = "";
-        renderedRef.current.delete(idx);
       }
     }
 
-    // Figure out which visible pages need (re)rendering
-    const toRender: number[] = [];
-    for (const idx of visibleSet) {
-      const prev = renderedRef.current.get(idx);
-      if (prev !== currentArtifactId) toRender.push(idx);
-    }
+    const toRender = Array.from(visibleSet);
 
-    if (toRender.length === 0) return;
-
-    // Render pages one at a time, yielding between each
     (async () => {
       for (const idx of toRender) {
         if (cancelled) return;
@@ -154,7 +134,7 @@ export const PreviewPanel = memo(function PreviewPanel({
         canvas.height = ch;
 
         try {
-          // Yield to main thread so typing/scrolling stays responsive
+          // Yield to main thread between pages so typing/scrolling stays responsive
           await new Promise<void>(r => requestAnimationFrame(() => r()));
           if (cancelled) return;
 
@@ -169,7 +149,6 @@ export const PreviewPanel = memo(function PreviewPanel({
 
           if (cancelled) return;
 
-          // Create wrapper with CSS transform for fit-to-width
           const wrapper = document.createElement("div");
           wrapper.style.cssText = `position:absolute;top:0;left:0;transform-origin:0px 0px;transform:scale(${scale})`;
           wrapper.appendChild(canvas);
@@ -177,7 +156,6 @@ export const PreviewPanel = memo(function PreviewPanel({
           div.innerHTML = "";
           div.style.backgroundColor = "#ffffff";
           div.appendChild(wrapper);
-          renderedRef.current.set(idx, currentArtifactId);
         } catch (e) {
           console.warn(`Page ${idx} render failed:`, e);
         }
@@ -187,18 +165,39 @@ export const PreviewPanel = memo(function PreviewPanel({
     return () => { cancelled = true; };
   }, [visibleSet, artifactContent, renderer, containerWidth, pages]);
 
-  // Stable ref callbacks (cached per page index)
+  // Stable ref callbacks
   const refCbCache = useRef<Map<number, (el: HTMLDivElement | null) => void>>(new Map());
   const getPageRef = useCallback((i: number) => {
     let cb = refCbCache.current.get(i);
     if (!cb) {
       cb = (el: HTMLDivElement | null) => {
         if (el) pageRefsMap.current.set(i, el);
-        else { pageRefsMap.current.delete(i); renderedRef.current.delete(i); }
+        else pageRefsMap.current.delete(i);
       };
       refCbCache.current.set(i, cb);
     }
     return cb;
+  }, []);
+
+  // Auto-hide overlays after 3s of no scrolling
+  const [overlaysVisible, setOverlaysVisible] = useState(true);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      setOverlaysVisible(true);
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = setTimeout(() => setOverlaysVisible(false), 3000);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    // Start the initial hide timer
+    hideTimerRef.current = setTimeout(() => setOverlaysVisible(false), 3000);
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    };
   }, []);
 
   // Zoom
@@ -210,36 +209,57 @@ export const PreviewPanel = memo(function PreviewPanel({
   }, []);
 
   return (
-    <div ref={scrollRef} className="relative h-full w-full overflow-auto bg-white" onWheel={handleWheel}>
+    <div className="relative h-full w-full" onWheel={handleWheel}>
+      {/* Fixed overlays — positioned relative to the panel, not the scroll content */}
       {error && (
         <div className="absolute right-3 top-3 z-10 rounded bg-red-900/80 px-2 py-1 text-xs text-red-300" title={error}>
           Error
         </div>
       )}
 
-      <div className="absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded bg-gray-800/80 px-1.5 py-1 text-xs text-gray-300">
+      <div
+        className="absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded bg-gray-800/80 px-1.5 py-1 text-xs text-gray-300 transition-opacity duration-500"
+        style={{ opacity: overlaysVisible ? 0.35 : 0, pointerEvents: overlaysVisible ? "auto" : "none" }}
+      >
         <button onClick={() => setZoom(z => Math.max(0.25, z - 0.25))} className="rounded px-1.5 py-0.5 hover:bg-gray-700">-</button>
         <button onClick={() => setZoom(1)} className="min-w-[3rem] rounded px-1 py-0.5 text-center hover:bg-gray-700">{Math.round(zoom * 100)}%</button>
         <button onClick={() => setZoom(z => Math.min(5, z + 0.25))} className="rounded px-1.5 py-0.5 hover:bg-gray-700">+</button>
       </div>
 
       {pages.length > 0 && (
-        <div className="absolute bottom-3 left-3 z-10 rounded bg-gray-800/80 px-2 py-1 text-xs text-gray-300">
+        <div
+          className="absolute bottom-3 left-3 z-10 rounded bg-gray-800/80 px-2 py-1 text-xs text-gray-300 transition-opacity duration-500"
+          style={{ opacity: overlaysVisible ? 0.35 : 0 }}
+        >
           {pages.length} page{pages.length !== 1 ? "s" : ""}
         </div>
       )}
 
+      {/* Scrollable content */}
+      <div ref={scrollRef} className="h-full w-full overflow-auto bg-white">
       {pages.length > 0 && containerWidth > 0 && (
         <div style={{ zoom: zoom !== 1 ? zoom : undefined, padding: PADDING, minHeight: totalHeight }}>
-          {pages.map((page, i) => (
-            <PageRenderer
-              key={i}
-              ref={getPageRef(i)}
-              pageInfo={page}
-              containerWidth={containerWidth}
-              pixelPerPt={PIXEL_PER_PT}
-            />
-          ))}
+          {pages.map((page, i) => {
+            const cw = Math.ceil(page.width * PIXEL_PER_PT);
+            const ch = Math.ceil(page.height * PIXEL_PER_PT);
+            const scale = containerWidth > 0 ? containerWidth / cw : 1;
+            const displayHeight = ch * scale;
+
+            return (
+              <div
+                key={i}
+                ref={getPageRef(i)}
+                style={{
+                  width: containerWidth,
+                  height: displayHeight,
+                  position: "relative",
+                  marginBottom: PAGE_GAP,
+                  overflow: "hidden",
+                  backgroundColor: "#ffffff",
+                }}
+              />
+            );
+          })}
         </div>
       )}
 
@@ -248,6 +268,7 @@ export const PreviewPanel = memo(function PreviewPanel({
           Start typing to see preview
         </div>
       )}
+      </div>
     </div>
   );
 });

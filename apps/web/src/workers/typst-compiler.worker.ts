@@ -68,7 +68,7 @@ async function doMount(
 
     if (isBinaryFile(file.path)) {
       try {
-        const res = await fetch(`/api/projects/${projectId}/files/${encodeFilePath(file.path)}`);
+        const res = await fetch(`/api/projects/${projectId}/files/${encodeFilePath(file.path)}`, { credentials: 'include' });
         if (res.ok) {
           const buf = await res.arrayBuffer();
           c.mapShadow(filePath, new Uint8Array(buf));
@@ -76,7 +76,7 @@ async function doMount(
       } catch { /* skip unavailable files */ }
     } else {
       try {
-        const res = await fetch(`/api/projects/${projectId}/files/${encodeFilePath(file.path)}`);
+        const res = await fetch(`/api/projects/${projectId}/files/${encodeFilePath(file.path)}`, { credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
           if (data.content != null) {
