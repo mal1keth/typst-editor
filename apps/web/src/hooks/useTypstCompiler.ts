@@ -45,6 +45,12 @@ async function getTypst(version: string) {
     getModule: () => wasmUrl(version, "typst-ts-renderer"),
   });
 
+  // Enable Typst package registry so @preview/* imports work
+  const TypstSnippet = mod.TypstSnippet;
+  if (TypstSnippet?.fetchPackageRegistry) {
+    $typst.use(TypstSnippet.fetchPackageRegistry());
+  }
+
   compilerCache.set(version, $typst);
   return $typst;
 }
