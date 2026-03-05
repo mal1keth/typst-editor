@@ -74,8 +74,8 @@ async function mountProjectFiles(
   compiler: any,
   version: string,
   files: ProjectFile[],
-  mainPath: string,
-  mainContent: string
+  activeFilePath: string,
+  activeContent: string
 ) {
   let mounted = mountedFilesCache.get(version);
   if (!mounted) {
@@ -89,6 +89,9 @@ async function mountProjectFiles(
   for (const file of files) {
     const vfsPath = `/${file.path}`;
     currentPaths.add(vfsPath);
+
+    // Skip the active file here — we'll mount it with the editor's live content below
+    if (vfsPath === activeFilePath) continue;
 
     if (file.binary) {
       // Always re-mount binary files (we don't cache binary content hashes)
@@ -106,10 +109,10 @@ async function mountProjectFiles(
     }
   }
 
-  // Always update the main file with current editor content
-  currentPaths.add(mainPath);
-  await compiler.addSource(mainPath, mainContent);
-  mounted.set(mainPath, mainContent);
+  // Always update the active file with current editor content
+  currentPaths.add(activeFilePath);
+  await compiler.addSource(activeFilePath, activeContent);
+  mounted.set(activeFilePath, activeContent);
 
   // Unmap files that were removed from the project
   for (const [path] of mounted) {
@@ -128,6 +131,7 @@ export function useTypstCompiler(
   content: string,
   version: string,
   mainFilePath?: string,
+  activeFilePath?: string,
   projectFiles?: ProjectFile[]
 ) {
   const [svgContent, setSvgContent] = useState("");
@@ -153,10 +157,12 @@ export function useTypstCompiler(
         const files = projectFilesRef.current;
         if (files && files.length > 0) {
           const mainPath = mainFilePath ? `/${mainFilePath}` : "/main.typ";
+          // The file currently open in the editor — update it with live content
+          const editingPath = activeFilePath ? `/${activeFilePath}` : mainPath;
 
-          await mountProjectFiles(compiler, version, files, mainPath, contentRef.current);
+          await mountProjectFiles(compiler, version, files, editingPath, contentRef.current);
 
-          // Pass root: '/' so the Typst access model allows reading all VFS files
+          // Always compile from the main file
           const svg = await compiler.svg({ mainFilePath: mainPath, root: '/' });
           setSvgContent(svg);
         } else {
@@ -182,7 +188,7 @@ export function useTypstCompiler(
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [content, version, mainFilePath]);
+  }, [content, version, mainFilePath, activeFilePath]);
 
   const clearDiagnostics = useCallback(() => setDiagnostics([]), []);
 
@@ -194,6 +200,7 @@ export async function exportPdf(
   filename: string,
   version: string,
   mainFilePath?: string,
+  activeFilePath?: string,
   projectFiles?: ProjectFile[]
 ) {
   const compiler = await getTypst(version);
@@ -201,7 +208,8 @@ export async function exportPdf(
   let pdf: Uint8Array;
   if (projectFiles && projectFiles.length > 0) {
     const mainPath = mainFilePath ? `/${mainFilePath}` : "/main.typ";
-    await mountProjectFiles(compiler, version, projectFiles, mainPath, content);
+    const editingPath = activeFilePath ? `/${activeFilePath}` : mainPath;
+    await mountProjectFiles(compiler, version, projectFiles, editingPath, content);
     pdf = await compiler.pdf({ mainFilePath: mainPath, root: '/' });
   } else {
     pdf = await compiler.pdf({ mainContent: content });

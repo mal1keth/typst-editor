@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { FileEntry } from "@/lib/api";
 
 interface Props {
@@ -16,6 +16,88 @@ interface TreeNode {
   path: string;
   isDirectory: boolean;
   children: TreeNode[];
+}
+
+// Retro-style SVG icons
+function FolderIcon({ open }: { open?: boolean }) {
+  return open ? (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="shrink-0">
+      <path d="M1 3h5l2 2h7v1H3l-2 7V3z" fill="#b08c3e" />
+      <path d="M1 6l2 7h11l2-7H1z" fill="#d4a843" />
+    </svg>
+  ) : (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="shrink-0">
+      <path d="M1 2h5l2 2h7v10H1V2z" fill="#b08c3e" />
+      <path d="M1 4h14v8H1V4z" fill="#d4a843" />
+    </svg>
+  );
+}
+
+function FileIcon({ isMain }: { isMain?: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="shrink-0">
+      <path d="M3 1h7l3 3v11H3V1z" fill={isMain ? "#5a4a1e" : "#374151"} />
+      <path d="M4 2h5.5L12 4.5V14H4V2z" fill={isMain ? "#d4a843" : "#6b7280"} />
+      <path d="M10 1v3h3" fill="none" stroke={isMain ? "#b08c3e" : "#4b5563"} strokeWidth="0.5" />
+    </svg>
+  );
+}
+
+function NewFolderIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="shrink-0">
+      <path d="M1 3h5l2 2h7v9H1V3z" fill="#6b7280" />
+      <path d="M8 8v4M6 10h4" stroke="#d1d5db" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Context menu component
+function ContextMenu({
+  x,
+  y,
+  items,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  items: { label: string; onClick: () => void; danger?: boolean }[];
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      className="fixed z-50 min-w-[140px] rounded border border-gray-700 bg-gray-900 py-1 shadow-xl"
+      style={{ left: x, top: y }}
+    >
+      {items.map((item) => (
+        <button
+          key={item.label}
+          onClick={() => {
+            item.onClick();
+            onClose();
+          }}
+          className={`block w-full px-3 py-1.5 text-left text-xs ${
+            item.danger
+              ? "text-red-400 hover:bg-red-900/30"
+              : "text-gray-300 hover:bg-gray-800"
+          }`}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function buildTree(files: FileEntry[]): TreeNode[] {
@@ -69,6 +151,7 @@ function FileTreeNode({
   onSelectFile,
   onDeleteFile,
   onSetMainFile,
+  onContextMenu,
 }: {
   node: TreeNode;
   depth: number;
@@ -77,6 +160,7 @@ function FileTreeNode({
   onSelectFile: (path: string) => void;
   onDeleteFile: (path: string) => void;
   onSetMainFile: (path: string) => void;
+  onContextMenu: (e: React.MouseEvent, node: TreeNode) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const isActive = node.path === activeFilePath;
@@ -87,11 +171,12 @@ function FileTreeNode({
       <div>
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex w-full items-center gap-1 rounded px-2 py-1 text-sm text-gray-400 hover:bg-gray-800"
+          onContextMenu={(e) => onContextMenu(e, node)}
+          className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-sm text-gray-400 hover:bg-gray-800"
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
         >
-          <span className="text-xs">{expanded ? "▼" : "▶"}</span>
-          <span>{node.name}</span>
+          <FolderIcon open={expanded} />
+          <span className="truncate">{node.name}</span>
         </button>
         {expanded &&
           node.children.map((child) => (
@@ -104,11 +189,14 @@ function FileTreeNode({
               onSelectFile={onSelectFile}
               onDeleteFile={onDeleteFile}
               onSetMainFile={onSetMainFile}
+              onContextMenu={onContextMenu}
             />
           ))}
       </div>
     );
   }
+
+  const showSetMain = !isMain && node.name.endsWith(".typ");
 
   return (
     <div
@@ -118,37 +206,36 @@ function FileTreeNode({
           : "text-gray-300 hover:bg-gray-800"
       }`}
       style={{ paddingLeft: `${depth * 12 + 20}px` }}
+      onContextMenu={(e) => onContextMenu(e, node)}
     >
       <button
         onClick={() => onSelectFile(node.path)}
-        className="flex-1 truncate text-left"
+        className="flex flex-1 items-center gap-1.5 truncate text-left"
       >
-        {node.name}
+        <FileIcon isMain={isMain} />
+        <span className="truncate">{node.name}</span>
         {isMain && (
-          <span className="ml-1 text-xs text-yellow-500" title="Main file">
-            *
+          <span
+            className="ml-auto shrink-0 rounded bg-yellow-600/20 px-1 py-0.5 font-mono text-[10px] leading-none text-yellow-500"
+            title="Main compile file"
+          >
+            main
           </span>
         )}
       </button>
-      <div className="hidden gap-1 group-hover:flex">
-        {!isMain && node.name.endsWith(".typ") && (
-          <button
-            onClick={() => onSetMainFile(node.path)}
-            className="text-xs text-gray-500 hover:text-yellow-400"
-            title="Set as main file"
-          >
-            M
-          </button>
-        )}
+      {showSetMain && (
         <button
-          onClick={() => {
-            if (confirm(`Delete "${node.name}"?`)) onDeleteFile(node.path);
-          }}
-          className="text-xs text-gray-500 hover:text-red-400"
+          onClick={(e) => { e.stopPropagation(); onSetMainFile(node.path); }}
+          className={`ml-1 shrink-0 rounded px-1 py-0.5 font-mono text-[10px] leading-none ${
+            isActive
+              ? "text-gray-400 hover:text-yellow-400"
+              : "hidden text-gray-600 hover:text-yellow-400 group-hover:block"
+          }`}
+          title="Set as main compile file"
         >
-          x
+          M
         </button>
-      </div>
+      )}
     </div>
   );
 }
@@ -164,6 +251,11 @@ export function FileTree({
 }: Props) {
   const [newFileName, setNewFileName] = useState("");
   const [showInput, setShowInput] = useState<false | "file" | "folder">(false);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    node: TreeNode;
+  } | null>(null);
   const tree = buildTree(files);
 
   const handleCreate = () => {
@@ -174,6 +266,32 @@ export function FileTree({
     setShowInput(false);
   };
 
+  const handleContextMenu = (e: React.MouseEvent, node: TreeNode) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, node });
+  };
+
+  const contextMenuItems = contextMenu
+    ? [
+        ...(!contextMenu.node.isDirectory && contextMenu.node.name.endsWith(".typ") && contextMenu.node.path !== mainFile
+          ? [
+              {
+                label: "Set as main file",
+                onClick: () => onSetMainFile(contextMenu.node.path),
+              },
+            ]
+          : []),
+        {
+          label: "Delete",
+          onClick: () => {
+            if (confirm(`Delete "${contextMenu.node.name}"?`))
+              onDeleteFile(contextMenu.node.path);
+          },
+          danger: true,
+        },
+      ]
+    : [];
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-gray-800 px-3 py-2">
@@ -182,11 +300,13 @@ export function FileTree({
         </span>
         <div className="flex gap-1">
           <button
-            onClick={() => setShowInput(showInput === "folder" ? false : "folder")}
-            className={`text-sm ${showInput === "folder" ? "text-blue-400" : "text-gray-500 hover:text-gray-300"}`}
+            onClick={() =>
+              setShowInput(showInput === "folder" ? false : "folder")
+            }
+            className={`${showInput === "folder" ? "text-blue-400" : "text-gray-500 hover:text-gray-300"}`}
             title="New folder"
           >
-            📁
+            <NewFolderIcon />
           </button>
           <button
             onClick={() => setShowInput(showInput === "file" ? false : "file")}
@@ -226,9 +346,19 @@ export function FileTree({
             onSelectFile={onSelectFile}
             onDeleteFile={onDeleteFile}
             onSetMainFile={onSetMainFile}
+            onContextMenu={handleContextMenu}
           />
         ))}
       </div>
+
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenuItems}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 }

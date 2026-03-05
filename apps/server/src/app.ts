@@ -25,11 +25,13 @@ app.route("/api/github", github);
 
 app.get("/api/health", (c) => c.json({ ok: true }));
 
-// Serve static frontend in production
-if (process.env.NODE_ENV === "production") {
-  app.use("/*", serveStatic({ root: "../web/dist" }));
-  // SPA fallback: serve index.html for non-API routes
-  app.get("*", serveStatic({ root: "../web/dist", path: "index.html" }));
+// Deferred so WebSocket routes can be registered first
+export function setupStaticServing() {
+  if (process.env.NODE_ENV === "production") {
+    app.use("/*", serveStatic({ root: "../web/dist" }));
+    // SPA fallback: serve index.html for non-API/WS routes
+    app.get("*", serveStatic({ root: "../web/dist", path: "index.html" }));
+  }
 }
 
 export default app;

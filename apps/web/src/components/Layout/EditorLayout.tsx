@@ -53,12 +53,14 @@ export function EditorLayout({ projectId, onBack }: Props) {
   const isRemoteUpdateRef = useRef(false);
 
   const [showCompilerOutput, setShowCompilerOutput] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
   const compileContent = activeFileContent || "";
   const { svgContent, error, compiling, diagnostics, clearDiagnostics } = useTypstCompiler(
     compileContent,
     compilerVersion,
     currentProject?.mainFile,
+    activeFilePath ?? undefined,
     projectFiles
   );
 
@@ -139,7 +141,7 @@ export function EditorLayout({ projectId, onBack }: Props) {
     if (!activeFileContent || !currentProject) return;
     setExportingPdf(true);
     try {
-      await exportPdf(activeFileContent, currentProject.mainFile, compilerVersion, currentProject.mainFile, projectFiles);
+      await exportPdf(activeFileContent, currentProject.mainFile, compilerVersion, currentProject.mainFile, activeFilePath ?? undefined, projectFiles);
     } catch (e: any) {
       alert(`PDF export failed: ${e.message}`);
     } finally {
@@ -173,47 +175,74 @@ export function EditorLayout({ projectId, onBack }: Props) {
         onCompilerOutput={() => setShowCompilerOutput(!showCompilerOutput)}
       />
 
-      <div className="flex flex-1 overflow-hidden">
+      <PanelGroup direction="horizontal" className="flex-1 overflow-hidden">
         {/* Sidebar */}
-        <div className="flex w-56 flex-shrink-0 flex-col border-r border-gray-800 bg-gray-900">
-          <div className="flex-1">
-            {showGitHub ? (
-              <GitHubPanel
-                projectId={projectId}
-                onClose={() => setShowGitHub(false)}
-                onPullComplete={() => loadProject(projectId)}
-              />
-            ) : (
-              <FileTree
-                files={currentProject.files}
-                activeFilePath={activeFilePath}
-                mainFile={currentProject.mainFile}
-                onSelectFile={openFile}
-                onCreateFile={(path, isDir) =>
-                  createFile(path, isDir ? undefined : "", isDir)
-                }
-                onDeleteFile={deleteFile}
-                onSetMainFile={updateMainFile}
-              />
-            )}
+        {!sidebarCollapsed && (
+          <>
+            <Panel defaultSize={15} minSize={10} maxSize={30}>
+              <div className="flex h-full flex-col border-r border-gray-800 bg-gray-900">
+                <div className="flex-1 overflow-hidden">
+                  {showGitHub ? (
+                    <GitHubPanel
+                      projectId={projectId}
+                      onClose={() => setShowGitHub(false)}
+                      onPullComplete={() => loadProject(projectId)}
+                    />
+                  ) : (
+                    <FileTree
+                      files={currentProject.files}
+                      activeFilePath={activeFilePath}
+                      mainFile={currentProject.mainFile}
+                      onSelectFile={openFile}
+                      onCreateFile={(path, isDir) =>
+                        createFile(path, isDir ? undefined : "", isDir)
+                      }
+                      onDeleteFile={deleteFile}
+                      onSetMainFile={updateMainFile}
+                    />
+                  )}
+                </div>
+                {/* Collaboration status + collapse */}
+                <div className="flex items-center justify-between border-t border-gray-800 px-3 py-2 text-xs text-gray-500">
+                  <span>
+                    <span
+                      className={`mr-1.5 inline-block h-2 w-2 rounded-full ${
+                        connected ? "bg-green-500" : "bg-gray-600"
+                      }`}
+                    />
+                    {connected ? `${peerCount} connected` : "Offline"}
+                  </span>
+                  <button
+                    onClick={() => setSidebarCollapsed(true)}
+                    className="text-gray-600 hover:text-gray-300"
+                    title="Collapse sidebar"
+                  >
+                    ◀
+                  </button>
+                </div>
+              </div>
+            </Panel>
+            <PanelResizeHandle className="w-1 bg-gray-800 transition-colors hover:bg-blue-600" />
+          </>
+        )}
+
+        {/* Collapsed sidebar toggle */}
+        {sidebarCollapsed && (
+          <div className="flex flex-col items-center border-r border-gray-800 bg-gray-900 py-2">
+            <button
+              onClick={() => setSidebarCollapsed(false)}
+              className="px-1.5 py-1 text-xs text-gray-500 hover:text-gray-300"
+              title="Expand sidebar"
+            >
+              ▶
+            </button>
           </div>
-          {/* Collaboration status */}
-          <div className="border-t border-gray-800 px-3 py-2 text-xs text-gray-500">
-            <span
-              className={`mr-1.5 inline-block h-2 w-2 rounded-full ${
-                connected ? "bg-green-500" : "bg-gray-600"
-              }`}
-            />
-            {connected
-              ? `${peerCount} connected`
-              : "Offline"}
-          </div>
-        </div>
+        )}
 
         {/* Editor + Preview */}
         {activeFilePath ? (
-          <PanelGroup direction="horizontal" className="flex-1">
-            <Panel defaultSize={50} minSize={25}>
+          <>
+            <Panel defaultSize={42} minSize={20}>
               <PanelGroup direction="vertical">
                 <Panel defaultSize={showCompilerOutput ? 70 : 100} minSize={30}>
                   <EditorPanel
@@ -237,20 +266,22 @@ export function EditorLayout({ projectId, onBack }: Props) {
               </PanelGroup>
             </Panel>
             <PanelResizeHandle className="w-1 bg-gray-800 transition-colors hover:bg-blue-600" />
-            <Panel defaultSize={50} minSize={25}>
+            <Panel defaultSize={42} minSize={20}>
               <PreviewPanel
                 svgContent={svgContent}
                 error={error}
                 compiling={compiling}
               />
             </Panel>
-          </PanelGroup>
+          </>
         ) : (
-          <div className="flex flex-1 items-center justify-center text-gray-500">
-            Select a file to edit
-          </div>
+          <Panel defaultSize={85}>
+            <div className="flex h-full items-center justify-center text-gray-500">
+              Select a file to edit
+            </div>
+          </Panel>
         )}
-      </div>
+      </PanelGroup>
 
       {showShare && (
         <ShareDialog
