@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "start": "node --import tsx src/index.ts",
     "build": "tsc",
     "type-check": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
@@ -19,6 +20,7 @@
     "jose": "^6",
     "nanoid": "^5",
     "octokit": "^4",
+    "tsx": "^4",
     "y-protocols": "^1.0.7",
     "yjs": "^13.6.29",
     "zod": "^3"
@@ -26,7 +28,6 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7",
     "drizzle-kit": "^0.30",
-    "tsx": "^4",
     "typescript": "^5.7"
   }
 }
