@@ -11,6 +11,7 @@ export const users = sqliteTable("users", {
   displayName: text("display_name").notNull(),
   avatarUrl: text("avatar_url"),
   githubAccessToken: text("github_access_token"),
+  passwordHash: text("password_hash"),
   createdAt: text("created_at").default(sql`(datetime('now'))`),
   updatedAt: text("updated_at").default(sql`(datetime('now'))`),
 });

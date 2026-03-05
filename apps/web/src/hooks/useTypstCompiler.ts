@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 // Each version loads its entire stack (JS wrapper + WASM) from CDN
 // so the JS glue code always matches its WASM binary.
@@ -49,10 +49,17 @@ async function getTypst(version: string) {
   return $typst;
 }
 
+export interface CompilerDiagnostic {
+  severity: "error" | "warning";
+  message: string;
+  timestamp: number;
+}
+
 export function useTypstCompiler(content: string, version: string) {
   const [svgContent, setSvgContent] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [compiling, setCompiling] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<CompilerDiagnostic[]>([]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentRef = useRef(content);
   contentRef.current = content;
@@ -69,8 +76,15 @@ export function useTypstCompiler(content: string, version: string) {
         const svg = await compiler.svg({ mainContent: contentRef.current });
         setSvgContent(svg);
         setError(null);
+        setDiagnostics([]);
       } catch (e: any) {
-        setError(e?.message || String(e));
+        const message = e?.message || String(e);
+        setError(message);
+        // Don't clear svgContent — it retains the last successful render
+        setDiagnostics((prev) => [
+          ...prev.slice(-49),
+          { severity: "error" as const, message, timestamp: Date.now() },
+        ]);
       } finally {
         setCompiling(false);
       }
@@ -81,7 +95,9 @@ export function useTypstCompiler(content: string, version: string) {
     };
   }, [content, version]);
 
-  return { svgContent, error, compiling };
+  const clearDiagnostics = useCallback(() => setDiagnostics([]), []);
+
+  return { svgContent, error, compiling, diagnostics, clearDiagnostics };
 }
 
 export async function exportPdf(

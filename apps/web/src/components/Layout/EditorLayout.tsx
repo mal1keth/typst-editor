@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { EditorPanel } from "@/components/Editor/EditorPanel";
+import { CompilerOutputPanel } from "@/components/Editor/CompilerOutputPanel";
 import { PreviewPanel } from "@/components/Preview/PreviewPanel";
 import { FileTree } from "@/components/FileTree/FileTree";
 import { GitHubPanel } from "@/components/GitHub/GitHubPanel";
@@ -50,8 +51,9 @@ export function EditorLayout({ projectId, onBack }: Props) {
   const collabRef = useRef<CollabState | null>(null);
   const isRemoteUpdateRef = useRef(false);
 
+  const [showCompilerOutput, setShowCompilerOutput] = useState(false);
   const compileContent = activeFileContent || "";
-  const { svgContent, error, compiling } = useTypstCompiler(compileContent, compilerVersion);
+  const { svgContent, error, compiling, diagnostics, clearDiagnostics } = useTypstCompiler(compileContent, compilerVersion);
 
   useEffect(() => {
     loadProject(projectId);
@@ -142,12 +144,15 @@ export function EditorLayout({ projectId, onBack }: Props) {
         saving={savingFile}
         githubLinked={!!currentProject.githubRepoFullName}
         compilerVersion={compilerVersion}
+        errorCount={error ? 1 : 0}
+        showingCompilerOutput={showCompilerOutput}
         onBack={onBack}
         onShare={() => setShowShare(true)}
         onExportPdf={handleExportPdf}
         exportingPdf={exportingPdf}
         onGitHub={() => setShowGitHub(!showGitHub)}
         onVersionChange={setCompilerVersion}
+        onCompilerOutput={() => setShowCompilerOutput(!showCompilerOutput)}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -191,11 +196,27 @@ export function EditorLayout({ projectId, onBack }: Props) {
         {activeFilePath ? (
           <PanelGroup direction="horizontal" className="flex-1">
             <Panel defaultSize={50} minSize={25}>
-              <EditorPanel
-                key={activeFilePath}
-                initialContent={activeFileContent || ""}
-                onChange={handleChange}
-              />
+              <PanelGroup direction="vertical">
+                <Panel defaultSize={showCompilerOutput ? 70 : 100} minSize={30}>
+                  <EditorPanel
+                    key={activeFilePath}
+                    initialContent={activeFileContent || ""}
+                    onChange={handleChange}
+                  />
+                </Panel>
+                {showCompilerOutput && (
+                  <>
+                    <PanelResizeHandle className="h-1 bg-gray-800 transition-colors hover:bg-blue-600" />
+                    <Panel defaultSize={30} minSize={15}>
+                      <CompilerOutputPanel
+                        diagnostics={diagnostics}
+                        currentError={error}
+                        onClear={clearDiagnostics}
+                      />
+                    </Panel>
+                  </>
+                )}
+              </PanelGroup>
             </Panel>
             <PanelResizeHandle className="w-1 bg-gray-800 transition-colors hover:bg-blue-600" />
             <Panel defaultSize={50} minSize={25}>

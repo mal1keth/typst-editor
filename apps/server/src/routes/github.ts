@@ -28,6 +28,62 @@ async function getUserToken(userId: string): Promise<string | null> {
   return user?.githubAccessToken || null;
 }
 
+// Shared helper: download all files from a GitHub repo tree into a project
+async function pullRepoFiles(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  commitSha: string,
+  projectId: string
+): Promise<number> {
+  const { data: tree } = await octokit.rest.git.getTree({
+    owner,
+    repo,
+    tree_sha: commitSha,
+    recursive: "true",
+  });
+
+  ensureProjectDir(projectId);
+
+  // Clear existing file metadata
+  await db
+    .delete(schema.projectFiles)
+    .where(eq(schema.projectFiles.projectId, projectId));
+
+  let fileCount = 0;
+  for (const item of tree.tree) {
+    if (item.type === "blob" && item.path && item.sha) {
+      const { data: blob } = await octokit.rest.git.getBlob({
+        owner,
+        repo,
+        file_sha: item.sha,
+      });
+
+      const content = Buffer.from(blob.content, "base64");
+      writeProjectFile(projectId, item.path, content);
+
+      await db.insert(schema.projectFiles).values({
+        id: nanoid(),
+        projectId,
+        path: item.path,
+        isDirectory: false,
+        sizeBytes: content.length,
+      });
+      fileCount++;
+    } else if (item.type === "tree" && item.path) {
+      await db.insert(schema.projectFiles).values({
+        id: nanoid(),
+        projectId,
+        path: item.path,
+        isDirectory: true,
+        sizeBytes: 0,
+      });
+    }
+  }
+
+  return fileCount;
+}
+
 // List user's repos
 github.get("/repos", async (c) => {
   const { userId } = c.get("user");
@@ -142,52 +198,7 @@ github.post(
     });
     const commitSha = ref.object.sha;
 
-    // Get tree recursively
-    const { data: tree } = await octokit.rest.git.getTree({
-      owner,
-      repo,
-      tree_sha: commitSha,
-      recursive: "true",
-    });
-
-    ensureProjectDir(projectId);
-
-    // Clear existing file metadata
-    await db
-      .delete(schema.projectFiles)
-      .where(eq(schema.projectFiles.projectId, projectId));
-
-    // Download and save each file
-    let fileCount = 0;
-    for (const item of tree.tree) {
-      if (item.type === "blob" && item.path && item.sha) {
-        const { data: blob } = await octokit.rest.git.getBlob({
-          owner,
-          repo,
-          file_sha: item.sha,
-        });
-
-        const content = Buffer.from(blob.content, "base64");
-        writeProjectFile(projectId, item.path, content);
-
-        await db.insert(schema.projectFiles).values({
-          id: nanoid(),
-          projectId,
-          path: item.path,
-          isDirectory: false,
-          sizeBytes: content.length,
-        });
-        fileCount++;
-      } else if (item.type === "tree" && item.path) {
-        await db.insert(schema.projectFiles).values({
-          id: nanoid(),
-          projectId,
-          path: item.path,
-          isDirectory: true,
-          sizeBytes: 0,
-        });
-      }
-    }
+    const fileCount = await pullRepoFiles(octokit, owner, repo, commitSha, projectId);
 
     await db
       .update(schema.projects)
@@ -373,5 +384,138 @@ github.get(
     }
   }
 );
+
+// Check repo for .typ files
+github.get("/repos/:owner/:repo/check", async (c) => {
+  const { userId } = c.get("user");
+  const owner = c.req.param("owner")!;
+  const repo = c.req.param("repo")!;
+
+  const token = await getUserToken(userId);
+  if (!token) return c.json({ error: "GitHub not connected" }, 400);
+
+  const octokit = getOctokit(token);
+
+  try {
+    const { data: repoData } = await octokit.rest.repos.get({ owner, repo });
+    const { data: ref } = await octokit.rest.git.getRef({
+      owner,
+      repo,
+      ref: `heads/${repoData.default_branch}`,
+    });
+    const { data: tree } = await octokit.rest.git.getTree({
+      owner,
+      repo,
+      tree_sha: ref.object.sha,
+      recursive: "true",
+    });
+
+    const typFiles = tree.tree
+      .filter((item) => item.type === "blob" && item.path?.endsWith(".typ"))
+      .map((item) => item.path);
+
+    return c.json({
+      hasTypFiles: typFiles.length > 0,
+      typFiles,
+      defaultBranch: repoData.default_branch,
+      totalFiles: tree.tree.filter((i) => i.type === "blob").length,
+    });
+  } catch {
+    return c.json({ error: "Cannot access repository" }, 403);
+  }
+});
+
+// Import GitHub repo as a new project
+github.post("/import", async (c) => {
+  const { userId } = c.get("user");
+  const body = await c.req.json<{
+    repoFullName: string;
+    branch?: string;
+    projectName?: string;
+  }>();
+
+  if (!body.repoFullName) {
+    return c.json({ error: "Repository full name is required" }, 400);
+  }
+
+  const token = await getUserToken(userId);
+  if (!token) return c.json({ error: "GitHub not connected" }, 400);
+
+  const [owner, repo] = body.repoFullName.split("/");
+  const octokit = getOctokit(token);
+
+  // Verify repo access and get default branch
+  let repoData;
+  try {
+    const { data } = await octokit.rest.repos.get({ owner, repo });
+    repoData = data;
+  } catch {
+    return c.json({ error: "Cannot access repository" }, 403);
+  }
+
+  const actualBranch = body.branch || repoData.default_branch || "main";
+
+  // Get commit SHA for the branch
+  const { data: ref } = await octokit.rest.git.getRef({
+    owner,
+    repo,
+    ref: `heads/${actualBranch}`,
+  });
+  const commitSha = ref.object.sha;
+
+  // Check for .typ files to determine mainFile
+  const { data: treeData } = await octokit.rest.git.getTree({
+    owner,
+    repo,
+    tree_sha: commitSha,
+    recursive: "true",
+  });
+
+  const typFiles = treeData.tree.filter(
+    (item) => item.type === "blob" && item.path?.endsWith(".typ")
+  );
+
+  let mainFile = "main.typ";
+  if (typFiles.length > 0) {
+    const hasMainTyp = typFiles.some((f) => f.path === "main.typ");
+    if (!hasMainTyp) {
+      mainFile = typFiles[0].path!;
+    }
+  }
+
+  // Create project
+  const projectId = nanoid();
+  const projectName = body.projectName || repo;
+
+  await db.insert(schema.projects).values({
+    id: projectId,
+    name: projectName,
+    ownerId: userId,
+    mainFile,
+    githubRepoFullName: body.repoFullName,
+    githubBranch: actualBranch,
+  });
+
+  // Download all files
+  const fileCount = await pullRepoFiles(octokit, owner, repo, commitSha, projectId);
+
+  // Update sync SHA
+  await db
+    .update(schema.projects)
+    .set({ githubLastSyncSha: commitSha })
+    .where(eq(schema.projects.id, projectId));
+
+  return c.json(
+    {
+      ok: true,
+      projectId,
+      projectName,
+      fileCount,
+      typFileCount: typFiles.length,
+      mainFile,
+    },
+    201
+  );
+});
 
 export default github;

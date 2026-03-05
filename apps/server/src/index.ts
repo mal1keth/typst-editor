@@ -20,9 +20,13 @@ sqlite.exec(`
     display_name TEXT NOT NULL,
     avatar_url TEXT,
     github_access_token TEXT,
+    password_hash TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
   );
+
+  -- Add password_hash column if it doesn't exist (migration for existing DBs)
+  -- SQLite doesn't have IF NOT EXISTS for ALTER TABLE, so we handle this in code below
 
   CREATE UNIQUE INDEX IF NOT EXISTS users_provider_idx ON users(auth_provider, auth_provider_id);
 
@@ -75,6 +79,13 @@ sqlite.exec(`
 
   CREATE UNIQUE INDEX IF NOT EXISTS collab_project_user_idx ON collaborators(project_id, user_id);
 `);
+
+// Migration: add password_hash column to existing databases
+try {
+  sqlite.exec(`ALTER TABLE users ADD COLUMN password_hash TEXT`);
+} catch {
+  // Column already exists
+}
 
 // WebSocket setup
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
