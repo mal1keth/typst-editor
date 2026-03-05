@@ -1,6 +1,6 @@
 import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
-import app from "./app.js";
+import app, { setupStaticServing } from "./app.js";
 import { db, schema } from "./db/index.js";
 import { sql } from "drizzle-orm";
 import { verifyToken } from "./lib/jwt.js";
@@ -129,6 +129,9 @@ app.get(
     };
   })
 );
+
+// Register SPA static serving AFTER WebSocket routes so /ws/ paths aren't caught by the catch-all
+setupStaticServing();
 
 const port = parseInt(process.env.PORT || "3000");
 
