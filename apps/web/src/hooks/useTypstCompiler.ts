@@ -80,13 +80,18 @@ async function getCompilerInstance(version: string): Promise<CompilerInstance> {
   return promise;
 }
 
+// Encode file path for URL: encode each segment separately to preserve slashes
+function encodeFilePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
 // Fetch file content from the API
 async function fetchFileContent(
   projectId: string,
   path: string
 ): Promise<string | null> {
   try {
-    const res = await fetch(`/api/projects/${projectId}/files/${encodeURIComponent(path)}`);
+    const res = await fetch(`/api/projects/${projectId}/files/${encodeFilePath(path)}`);
     if (!res.ok) return null;
     const data = await res.json();
     return data.content ?? null;
@@ -111,7 +116,7 @@ async function fetchBinaryContent(
   path: string
 ): Promise<Uint8Array | null> {
   try {
-    const res = await fetch(`/api/projects/${projectId}/files/${encodeURIComponent(path)}`);
+    const res = await fetch(`/api/projects/${projectId}/files/${encodeFilePath(path)}`);
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
     return new Uint8Array(buf);
