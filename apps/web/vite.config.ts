@@ -27,6 +27,10 @@ export default defineConfig({
       "/ws": {
         target: "ws://localhost:3000",
         ws: true,
+        // Suppress EPIPE errors when backend WS drops (e.g. server restart)
+        configure: (proxy) => {
+          proxy.on("error", () => {});
+        },
       },
     },
   },

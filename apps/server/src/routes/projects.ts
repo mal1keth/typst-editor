@@ -155,6 +155,40 @@ projects.delete(
   }
 );
 
+// Get all file contents (for compiler VFS mount)
+projects.get(
+  "/:projectId/files-all",
+  requireProjectAccess("read"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const files = listProjectFiles(projectId);
+    const binaryExts = [".png", ".jpg", ".jpeg", ".gif", ".pdf", ".ttf", ".otf", ".woff", ".woff2"];
+
+    const result: Array<{ path: string; content: string; binary: boolean }> = [];
+    for (const file of files) {
+      if (file.isDirectory) continue;
+      const isBinary = binaryExts.some((ext) => file.path.toLowerCase().endsWith(ext));
+      if (isBinary) {
+        const content = readProjectFileBinary(projectId, file.path);
+        if (content) {
+          result.push({
+            path: file.path,
+            content: content.toString("base64"),
+            binary: true,
+          });
+        }
+      } else {
+        const content = readProjectFile(projectId, file.path);
+        if (content !== null) {
+          result.push({ path: file.path, content, binary: false });
+        }
+      }
+    }
+
+    return c.json({ files: result });
+  }
+);
+
 // ── File operations ──────────────────────────────
 
 // Get file content

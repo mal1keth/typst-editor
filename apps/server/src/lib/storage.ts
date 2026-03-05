@@ -3,7 +3,8 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const projectsDir = join(__dirname, "../../data/projects");
+const dataDir = process.env.DATA_DIR || join(__dirname, "../../data");
+const projectsDir = join(dataDir, "projects");
 mkdirSync(projectsDir, { recursive: true });
 
 export function getProjectDir(projectId: string): string {

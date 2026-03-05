@@ -13,20 +13,6 @@ let compiler: TypstCompiler | null = null;
 let currentVersion: string | null = null;
 let mounted = false;
 
-const BINARY_EXTENSIONS = new Set([
-  ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg",
-  ".pdf", ".ttf", ".otf", ".woff", ".woff2",
-]);
-
-function isBinaryFile(path: string): boolean {
-  const ext = path.substring(path.lastIndexOf(".")).toLowerCase();
-  return BINARY_EXTENSIONS.has(ext);
-}
-
-function encodeFilePath(path: string): string {
-  return path.split("/").map(encodeURIComponent).join("/");
-}
-
 function wasmUrl(pkg: string, name: string) {
   return `https://cdn.jsdelivr.net/npm/@myriaddreamin/${name}@${pkg}/pkg/${name.replace(/-/g, "_")}_bg.wasm`;
 }
@@ -58,33 +44,34 @@ async function ensureCompiler(version: string): Promise<TypstCompiler> {
 async function doMount(
   c: TypstCompiler,
   projectId: string,
-  files: { path: string; isDirectory: boolean }[]
 ): Promise<boolean> {
   if (mounted) return false;
 
-  for (const file of files) {
-    if (file.isDirectory) continue;
-    const filePath = "/" + file.path;
-
-    if (isBinaryFile(file.path)) {
-      try {
-        const res = await fetch(`/api/projects/${projectId}/files/${encodeFilePath(file.path)}`, { credentials: 'include' });
-        if (res.ok) {
-          const buf = await res.arrayBuffer();
-          c.mapShadow(filePath, new Uint8Array(buf));
-        }
-      } catch { /* skip unavailable files */ }
-    } else {
-      try {
-        const res = await fetch(`/api/projects/${projectId}/files/${encodeFilePath(file.path)}`, { credentials: 'include' });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.content != null) {
-            c.addSource(filePath, data.content);
-          }
-        }
-      } catch { /* skip unavailable files */ }
+  // Fetch all file contents in a single request — avoids N+1 HTTP calls
+  // and works reliably with httpOnly auth cookies.
+  try {
+    const res = await fetch(`/api/projects/${projectId}/files-all`, { credentials: 'include' });
+    if (!res.ok) {
+      console.error(`files-all fetch failed: ${res.status} ${res.statusText}`);
+      mounted = true;
+      return true;
     }
+
+    const data = await res.json();
+    for (const file of data.files) {
+      const vfsPath = "/" + file.path;
+
+      if (file.binary) {
+        const raw = atob(file.content);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        c.mapShadow(vfsPath, bytes);
+      } else {
+        c.addSource(vfsPath, file.content);
+      }
+    }
+  } catch (e) {
+    console.error("Failed to fetch project files:", e);
   }
 
   mounted = true;
@@ -103,7 +90,7 @@ self.onmessage = async (e: MessageEvent) => {
       if (msg.needsMount) {
         mounted = false;
       }
-      const justMounted = await doMount(c, msg.projectId, msg.files);
+      const justMounted = await doMount(c, msg.projectId);
 
       // Reset after mount to clear accumulated addSource tracking state.
       // This prevents false "duplicate label" errors from typst.ts 0.7.0-rc2.
