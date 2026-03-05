@@ -6,7 +6,7 @@ interface PreviewPanelProps {
 
 export function PreviewPanel({ svgContent, error, compiling }: PreviewPanelProps) {
   return (
-    <div className="relative h-full w-full overflow-auto bg-gray-200">
+    <div className="relative h-full w-full overflow-auto bg-white">
       {compiling && (
         <div className="absolute right-3 top-3 z-10 rounded bg-gray-800/80 px-2 py-1 text-xs text-gray-300">
           Compiling...
