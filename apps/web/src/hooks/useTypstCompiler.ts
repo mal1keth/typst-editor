@@ -168,12 +168,15 @@ export function useTypstCompiler(
   const mountedFilesRef = useRef(new Set<string>());
   const mainFilePathRef = useRef<string | null>(null);
 
-  // Track content for current active file
+  // Use refs so the compile effect only triggers from compileSeq
   const contentRef = useRef(activeFileContent);
   contentRef.current = activeFileContent;
 
   const activeFilePathRef = useRef(activeFilePath);
   activeFilePathRef.current = activeFilePath;
+
+  const versionRef = useRef(version);
+  versionRef.current = version;
 
   // Use the project's configured main file, or fall back to main.typ / first .typ
   const mainFile = useMemo(() => {
@@ -217,17 +220,30 @@ export function useTypstCompiler(
     [projectId, allFiles]
   );
 
+  // Keep refs for values used inside the compile effect (so deps stay minimal)
+  const mountAllFilesRef = useRef(mountAllFiles);
+  mountAllFilesRef.current = mountAllFiles;
+  const mainFileRef = useRef(mainFile);
+  mainFileRef.current = mainFile;
+
   // Reset VFS when project files change
   useEffect(() => {
     vfsMountedRef.current = false;
   }, [allFiles]);
 
-  // Recompile when version or mainFile changes
+  // Recompile when version or mainFile changes; fully reset compiler state
   useEffect(() => {
+    // Clear cached instances to avoid stale comemo caches (e.g. false cyclic imports)
+    instanceCache.clear();
+    instanceRef.current = null;
+    vfsMountedRef.current = false;
     setCompileSeq((s) => s + 1);
   }, [version, mainFile]);
 
-  // Compile and render — only triggered by compileSeq changes
+  // Compile mutex: prevents overlapping compile+render cycles
+  const compileGuardRef = useRef({ busy: false, pending: false });
+
+  // Compile and render — ONLY triggered by compileSeq changes
   useEffect(() => {
     if (compileSeq === 0) return;
 
@@ -242,18 +258,25 @@ export function useTypstCompiler(
     );
 
     timerRef.current = setTimeout(async () => {
+      // If a compile is already running, mark pending and bail
+      if (compileGuardRef.current.busy) {
+        compileGuardRef.current.pending = true;
+        return;
+      }
+      compileGuardRef.current.busy = true;
       setCompiling(true);
       const startTime = performance.now();
 
       try {
         // Get or create compiler instance
         if (!instanceRef.current) {
-          instanceRef.current = await getCompilerInstance(version);
+          instanceRef.current = await getCompilerInstance(versionRef.current);
         }
+
         const { compiler, renderer } = instanceRef.current;
 
         // Mount all files on first compile
-        await mountAllFiles(compiler);
+        await mountAllFilesRef.current(compiler);
 
         // Update only the changed file (preserves comemo caches for all other files)
         const currentPath = activeFilePathRef.current;
@@ -264,7 +287,7 @@ export function useTypstCompiler(
 
         // Compile to vector format
         const compileResult = await compiler.compile({
-          mainFilePath: "/" + mainFile,
+          mainFilePath: "/" + mainFileRef.current,
           format: 0, // CompileFormatEnum.vector
           diagnostics: "full",
         });
@@ -288,15 +311,13 @@ export function useTypstCompiler(
               .map((d: any) => `${d.path}:${d.range}: ${d.message}`)
               .join("\n") || "Compilation failed";
           setError(errMsg);
-          // Don't return — keep the last successful render visible in the canvas
           return;
         }
 
-        // Render using the renderer
+        // Render: clear container, then render new content
         const container = containerRef.current;
         if (container) {
-          // Snapshot old children so we can remove them after the new render
-          const oldChildren = Array.from(container.children);
+          container.innerHTML = "";
 
           await renderer.renderToCanvas({
             container,
@@ -306,9 +327,6 @@ export function useTypstCompiler(
             pixelPerPt: 2,
           } as any);
 
-          // Remove old render now that new one is in place (no flash)
-          oldChildren.forEach((c) => c.remove());
-
           // Get page info for zoom controls
           await renderer.runWithSession(
             {
@@ -316,8 +334,7 @@ export function useTypstCompiler(
               artifactContent: compileResult.result,
             },
             async (session) => {
-              const pagesInfo = session.retrievePagesInfo();
-              setPages(pagesInfo);
+              setPages(session.retrievePagesInfo());
             }
           );
         }
@@ -333,19 +350,21 @@ export function useTypstCompiler(
       } finally {
         lastCompileMsRef.current = performance.now() - startTime;
         setCompiling(false);
+        compileGuardRef.current.busy = false;
+
+        // If another compile was requested while we were busy, trigger it
+        if (compileGuardRef.current.pending) {
+          compileGuardRef.current.pending = false;
+          setCompileSeq((s) => s + 1);
+        }
       }
     }, debounceMs);
 
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [compileSeq, version, mainFile, mountAllFiles, containerRef]);
-
-  // Reset compiler when version changes
-  useEffect(() => {
-    instanceRef.current = null;
-    vfsMountedRef.current = false;
-  }, [version]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compileSeq]);
 
   const clearDiagnostics = useCallback(() => setDiagnostics([]), []);
 
