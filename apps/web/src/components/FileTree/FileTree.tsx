@@ -6,9 +6,9 @@ interface Props {
   activeFilePath: string | null;
   mainFile: string;
   onSelectFile: (path: string) => void;
-  onCreateFile: (path: string, isDirectory?: boolean) => void;
-  onDeleteFile: (path: string) => void;
-  onSetMainFile: (path: string) => void;
+  onCreateFile?: (path: string, isDirectory?: boolean) => void;
+  onDeleteFile?: (path: string) => void;
+  onSetMainFile?: (path: string) => void;
 }
 
 interface TreeNode {
@@ -158,9 +158,9 @@ function FileTreeNode({
   activeFilePath: string | null;
   mainFile: string;
   onSelectFile: (path: string) => void;
-  onDeleteFile: (path: string) => void;
-  onSetMainFile: (path: string) => void;
-  onContextMenu: (e: React.MouseEvent, node: TreeNode) => void;
+  onDeleteFile?: (path: string) => void;
+  onSetMainFile?: (path: string) => void;
+  onContextMenu?: (e: React.MouseEvent, node: TreeNode) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const isActive = node.path === activeFilePath;
@@ -171,7 +171,7 @@ function FileTreeNode({
       <div>
         <button
           onClick={() => setExpanded(!expanded)}
-          onContextMenu={(e) => onContextMenu(e, node)}
+          onContextMenu={onContextMenu ? (e) => onContextMenu(e, node) : undefined}
           className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-sm text-gray-400 hover:bg-gray-800"
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
         >
@@ -196,7 +196,7 @@ function FileTreeNode({
     );
   }
 
-  const showSetMain = !isMain && node.name.endsWith(".typ");
+  const showSetMain = onSetMainFile && !isMain && node.name.endsWith(".typ");
 
   return (
     <div
@@ -206,7 +206,7 @@ function FileTreeNode({
           : "text-gray-300 hover:bg-gray-800"
       }`}
       style={{ paddingLeft: `${depth * 12 + 20}px` }}
-      onContextMenu={(e) => onContextMenu(e, node)}
+      onContextMenu={onContextMenu ? (e) => onContextMenu(e, node) : undefined}
     >
       <button
         onClick={() => onSelectFile(node.path)}
@@ -217,7 +217,7 @@ function FileTreeNode({
       </button>
       {showSetMain && (
         <button
-          onClick={(e) => { e.stopPropagation(); onSetMainFile(node.path); }}
+          onClick={(e) => { e.stopPropagation(); onSetMainFile!(node.path); }}
           className={`ml-1 shrink-0 rounded px-1 py-0.5 font-mono text-[10px] leading-none ${
             isActive
               ? "text-gray-400 hover:text-yellow-400"
@@ -252,21 +252,25 @@ export const FileTree = memo(function FileTree({
   const tree = useMemo(() => buildTree(files), [files]);
 
   const handleCreate = () => {
-    if (!newFileName.trim()) return;
+    if (!newFileName.trim() || !onCreateFile) return;
     const isDir = showInput === "folder";
     onCreateFile(newFileName.replace(/\/$/, ""), isDir);
     setNewFileName("");
     setShowInput(false);
   };
 
-  const handleContextMenu = (e: React.MouseEvent, node: TreeNode) => {
-    e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY, node });
-  };
+  const canEdit = !!(onCreateFile || onDeleteFile || onSetMainFile);
+
+  const handleContextMenu = canEdit
+    ? (e: React.MouseEvent, node: TreeNode) => {
+        e.preventDefault();
+        setContextMenu({ x: e.clientX, y: e.clientY, node });
+      }
+    : undefined;
 
   const contextMenuItems = contextMenu
     ? [
-        ...(!contextMenu.node.isDirectory && contextMenu.node.name.endsWith(".typ") && contextMenu.node.path !== mainFile
+        ...(onSetMainFile && !contextMenu.node.isDirectory && contextMenu.node.name.endsWith(".typ") && contextMenu.node.path !== mainFile
           ? [
               {
                 label: "Set as main file",
@@ -274,14 +278,18 @@ export const FileTree = memo(function FileTree({
               },
             ]
           : []),
-        {
-          label: "Delete",
-          onClick: () => {
-            if (confirm(`Delete "${contextMenu.node.name}"?`))
-              onDeleteFile(contextMenu.node.path);
-          },
-          danger: true,
-        },
+        ...(onDeleteFile
+          ? [
+              {
+                label: "Delete",
+                onClick: () => {
+                  if (confirm(`Delete "${contextMenu.node.name}"?`))
+                    onDeleteFile(contextMenu.node.path);
+                },
+                danger: true,
+              },
+            ]
+          : []),
       ]
     : [];
 
@@ -291,24 +299,26 @@ export const FileTree = memo(function FileTree({
         <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
           Files
         </span>
-        <div className="flex gap-1">
-          <button
-            onClick={() =>
-              setShowInput(showInput === "folder" ? false : "folder")
-            }
-            className={`${showInput === "folder" ? "text-blue-400" : "text-gray-500 hover:text-gray-300"}`}
-            title="New folder"
-          >
-            <NewFolderIcon />
-          </button>
-          <button
-            onClick={() => setShowInput(showInput === "file" ? false : "file")}
-            className={`text-lg leading-none ${showInput === "file" ? "text-blue-400" : "text-gray-500 hover:text-gray-300"}`}
-            title="New file"
-          >
-            +
-          </button>
-        </div>
+        {onCreateFile && (
+          <div className="flex gap-1">
+            <button
+              onClick={() =>
+                setShowInput(showInput === "folder" ? false : "folder")
+              }
+              className={`${showInput === "folder" ? "text-blue-400" : "text-gray-500 hover:text-gray-300"}`}
+              title="New folder"
+            >
+              <NewFolderIcon />
+            </button>
+            <button
+              onClick={() => setShowInput(showInput === "file" ? false : "file")}
+              className={`text-lg leading-none ${showInput === "file" ? "text-blue-400" : "text-gray-500 hover:text-gray-300"}`}
+              title="New file"
+            >
+              +
+            </button>
+          </div>
+        )}
       </div>
 
       {showInput && (

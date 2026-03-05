@@ -385,6 +385,65 @@ github.get(
   }
 );
 
+// Auto-pull: check if remote has new commits and pull if so.
+// Returns { pulled: false } if already in sync or not linked,
+// { pulled: true, commitSha, fileCount } on successful auto-pull.
+github.post(
+  "/projects/:projectId/github/auto-pull",
+  requireProjectAccess("write"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const { userId } = c.get("user");
+
+    const project = await db.query.projects.findFirst({
+      where: eq(schema.projects.id, projectId),
+    });
+
+    if (!project?.githubRepoFullName) {
+      return c.json({ pulled: false, reason: "not-linked" });
+    }
+
+    const token = await getUserToken(userId);
+    if (!token) {
+      return c.json({ pulled: false, reason: "no-github-token" });
+    }
+
+    const [owner, repo] = project.githubRepoFullName.split("/");
+    const branch = project.githubBranch || "main";
+    const octokit = getOctokit(token);
+
+    try {
+      const { data: ref } = await octokit.rest.git.getRef({
+        owner,
+        repo,
+        ref: `heads/${branch}`,
+      });
+
+      const remoteSha = ref.object.sha;
+      const localSha = project.githubLastSyncSha;
+
+      if (localSha === remoteSha) {
+        return c.json({ pulled: false, reason: "in-sync" });
+      }
+
+      // Out of sync — pull new files
+      const fileCount = await pullRepoFiles(octokit, owner, repo, remoteSha, projectId);
+
+      await db
+        .update(schema.projects)
+        .set({
+          githubLastSyncSha: remoteSha,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(schema.projects.id, projectId));
+
+      return c.json({ pulled: true, commitSha: remoteSha, fileCount });
+    } catch (e: any) {
+      return c.json({ pulled: false, reason: "error", error: e?.message || String(e) });
+    }
+  }
+);
+
 // Check repo for .typ files
 github.get("/repos/:owner/:repo/check", async (c) => {
   const { userId } = c.get("user");

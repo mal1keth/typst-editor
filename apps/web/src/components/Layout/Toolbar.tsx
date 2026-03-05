@@ -8,6 +8,8 @@ interface Props {
   showingCompilerOutput: boolean;
   compileMode: 'live' | 'manual';
   compiling: boolean;
+  readOnly?: boolean;
+  autoPullStatus?: string | null;
   onBack: () => void;
   onShare: () => void;
   onGitHub: () => void;
@@ -26,6 +28,8 @@ export const Toolbar = memo(function Toolbar({
   showingCompilerOutput,
   compileMode,
   compiling,
+  readOnly,
+  autoPullStatus,
   onBack,
   onShare,
   onGitHub,
@@ -42,12 +46,18 @@ export const Toolbar = memo(function Toolbar({
           onClick={onBack}
           className="text-sm text-gray-400 hover:text-gray-200"
         >
-          &larr; Projects
+          &larr; {readOnly ? "Back" : "Projects"}
         </button>
         <span className="text-gray-600">|</span>
         <h1 className="font-semibold text-gray-100">{projectName}</h1>
+        {readOnly && (
+          <span className="rounded bg-yellow-900/50 px-2 py-0.5 text-xs text-yellow-300">Read only</span>
+        )}
         {saving && (
           <span className="text-xs text-gray-500">Saving...</span>
+        )}
+        {autoPullStatus && (
+          <span className="text-xs text-green-400">{autoPullStatus}</span>
         )}
         <span className="text-gray-600">|</span>
         <div className="flex items-center gap-1.5">
@@ -56,7 +66,7 @@ export const Toolbar = memo(function Toolbar({
               onClick={onCompile}
               disabled={compiling}
               className="rounded bg-green-700 px-3 py-1 text-sm text-white hover:bg-green-600 disabled:opacity-50"
-              title={`Compile (${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+Enter)`}
+              title={`Compile (${navigator.platform.includes('Mac') ? '\u2318' : 'Ctrl'}+Enter)`}
             >
               {compiling ? "Compiling..." : "Compile"}
             </button>
@@ -90,29 +100,33 @@ export const Toolbar = memo(function Toolbar({
             </span>
           )}
         </button>
-        <button
-          onClick={onExportPdf}
-          disabled={exportingPdf}
-          className="rounded bg-gray-800 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 disabled:opacity-50"
-        >
-          {exportingPdf ? "Exporting..." : "PDF"}
-        </button>
-        <button
-          onClick={onGitHub}
-          className={`rounded px-3 py-1.5 text-sm ${
-            githubLinked
-              ? "bg-green-900/50 text-green-300 hover:bg-green-900/70"
-              : "bg-gray-800 text-gray-300 hover:bg-gray-700"
-          }`}
-        >
-          GitHub
-        </button>
-        <button
-          onClick={onShare}
-          className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500"
-        >
-          Share
-        </button>
+        {!readOnly && (
+          <>
+            <button
+              onClick={onExportPdf}
+              disabled={exportingPdf}
+              className="rounded bg-gray-800 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 disabled:opacity-50"
+            >
+              {exportingPdf ? "Exporting..." : "PDF"}
+            </button>
+            <button
+              onClick={onGitHub}
+              className={`rounded px-3 py-1.5 text-sm ${
+                githubLinked
+                  ? "bg-green-900/50 text-green-300 hover:bg-green-900/70"
+                  : "bg-gray-800 text-gray-300 hover:bg-gray-700"
+              }`}
+            >
+              GitHub
+            </button>
+            <button
+              onClick={onShare}
+              className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500"
+            >
+              Share
+            </button>
+          </>
+        )}
       </div>
     </header>
   );

@@ -106,6 +106,7 @@ export function useTypstCompiler(
   allFiles: FileEntry[],
   mainFilePath?: string,
   typingUntilRef?: { current: number },
+  shareToken?: string,
 ) {
   const version = TYPST_VERSION.pkg;
   const [error, setError] = useState<string | null>(null);
@@ -188,6 +189,7 @@ export function useTypstCompiler(
           needsReset: needsReset || needsMount,
           mainFilePath: mainFileRef.current,
           format: 0, // vector
+          shareToken: shareToken || undefined,
         });
 
         if (needsMount) needsMountRef.current = false;
