@@ -126,6 +126,7 @@ console.log(`Server starting on port ${port}`);
 const server = serve({
   fetch: app.fetch,
   port,
+  hostname: "0.0.0.0",
 });
 
 injectWebSocket(server);
