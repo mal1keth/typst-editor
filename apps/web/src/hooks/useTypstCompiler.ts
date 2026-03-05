@@ -172,6 +172,8 @@ export function useTypstCompiler(
   const vfsMountedRef = useRef(false);
   const mountedFilesRef = useRef(new Set<string>());
   const mainFilePathRef = useRef<string | null>(null);
+  // Track whether compiler needs reset before next compile (after mount or mainFile change)
+  const needsResetRef = useRef(true);
 
   // Use refs so the compile effect only triggers from compileSeq
   const contentRef = useRef(activeFileContent);
@@ -221,6 +223,8 @@ export function useTypstCompiler(
 
       mountedFilesRef.current = newMounted;
       vfsMountedRef.current = true;
+      // addSource() accumulates internal state; need reset before first compile
+      needsResetRef.current = true;
     },
     [projectId, allFiles]
   );
@@ -242,6 +246,7 @@ export function useTypstCompiler(
     instanceCache.clear();
     instanceRef.current = null;
     vfsMountedRef.current = false;
+    needsResetRef.current = true;
     setCompileSeq((s) => s + 1);
   }, [version, mainFile]);
 
@@ -281,38 +286,64 @@ export function useTypstCompiler(
         const { compiler, renderer } = instanceRef.current;
 
         // Mount all files on first compile
+        const justMounted = !vfsMountedRef.current;
         await mountAllFilesRef.current(compiler);
 
-        // Update only the changed file (preserves comemo caches for all other files)
-        const currentPath = activeFilePathRef.current;
-        const currentContent = contentRef.current;
-        if (currentPath && currentContent !== null) {
-          compiler.addSource("/" + currentPath, currentContent);
+        // Update only the changed file (preserves comemo caches for all other files).
+        // Skip if files were just mounted — the file is already up-to-date in the VFS,
+        // and double-calling addSource() for the same path triggers a WASM bug in
+        // typst.ts 0.7.0-rc2 where labels get registered twice (duplicate label errors).
+        if (!justMounted) {
+          const currentPath = activeFilePathRef.current;
+          const currentContent = contentRef.current;
+          if (currentPath && currentContent !== null) {
+            compiler.addSource("/" + currentPath, currentContent);
+          }
         }
 
-        // Compile to vector format
+        // Reset compiler state after initial file mount to clear any accumulated
+        // tracking state from addSource() calls. Preserves incremental compilation
+        // on subsequent edits (only the changed file is re-added via addSource).
+        if (needsResetRef.current) {
+          await compiler.reset();
+          needsResetRef.current = false;
+        }
+
+        // Compile to vector format.
+        // Use diagnostics: "none" to match the snippet API behavior.
+        // typst.ts 0.7.0-rc2 treats some warnings (e.g. duplicate labels from @ref)
+        // as hard errors when diagnostics are enabled, preventing output generation.
         const compileResult = await compiler.compile({
           mainFilePath: "/" + mainFileRef.current,
+          root: "/",
           format: 0, // CompileFormatEnum.vector
-          diagnostics: "full",
+          diagnostics: "none",
         });
 
-        // Handle diagnostics
-        if (compileResult.diagnostics && compileResult.diagnostics.length > 0) {
-          const newDiags: CompilerDiagnostic[] = compileResult.diagnostics.map(
-            (d: any) => ({
-              severity: d.severity === "error" ? "error" as const : "warning" as const,
-              message: `${d.path}:${d.range}: ${d.message}`,
-              timestamp: Date.now(),
-            })
-          );
-          setDiagnostics((prev) => [...prev.slice(-49), ...newDiags]);
-        }
-
         if (!compileResult.result) {
+          // Primary compile failed — run a diagnostic compile to get error details
+          const diagResult = await compiler.compile({
+            mainFilePath: "/" + mainFileRef.current,
+            root: "/",
+            format: 0,
+            diagnostics: "full",
+          });
+
+          const diags = diagResult.diagnostics ?? compileResult.diagnostics ?? [];
+          if (diags.length > 0) {
+            const newDiags: CompilerDiagnostic[] = diags.map(
+              (d: any) => ({
+                severity: d.severity === "error" ? "error" as const : "warning" as const,
+                message: `${d.path}:${d.range}: ${d.message}`,
+                timestamp: Date.now(),
+              })
+            );
+            setDiagnostics((prev) => [...prev.slice(-49), ...newDiags]);
+          }
+
           const errMsg =
-            compileResult.diagnostics
-              ?.filter((d: any) => d.severity === "error")
+            diags
+              .filter((d: any) => d.severity === "error")
               .map((d: any) => `${d.path}:${d.range}: ${d.message}`)
               .join("\n") || "Compilation failed";
           setError(errMsg);
@@ -397,10 +428,13 @@ export async function exportPdf(
     }
   }
 
+  // Use diagnostics: "none" to avoid false positives (e.g. duplicate label errors)
+  // in typst.ts 0.7.0-rc2 that would prevent output generation.
   const result = await compiler.compile({
     mainFilePath: "/" + mainFile,
+    root: "/",
     format: 1, // CompileFormatEnum.pdf
-    diagnostics: "full",
+    diagnostics: "none",
   });
 
   if (!result.result) {
