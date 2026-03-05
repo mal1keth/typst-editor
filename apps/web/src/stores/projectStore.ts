@@ -19,11 +19,15 @@ interface ProjectState {
   loadingProject: boolean;
   savingFile: boolean;
 
+  // Share token for anonymous access
+  shareToken: string | null;
+  readOnly: boolean;
+
   // Actions
   loadProjects: () => Promise<void>;
   createProject: (name: string) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
-  loadProject: (id: string) => Promise<void>;
+  loadProject: (id: string, shareToken?: string) => Promise<void>;
   openFile: (path: string) => Promise<void>;
   saveFile: (path: string, content: string) => Promise<void>;
   createFile: (path: string, content?: string, isDirectory?: boolean) => Promise<void>;
@@ -41,6 +45,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   activeFileContent: null,
   loadingProject: false,
   savingFile: false,
+  shareToken: null,
+  readOnly: false,
 
   loadProjects: async () => {
     set({ loadingList: true });
@@ -67,10 +73,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     await get().loadProjects();
   },
 
-  loadProject: async (id: string) => {
-    set({ loadingProject: true, currentProject: null, activeFilePath: null, activeFileContent: null });
+  loadProject: async (id: string, shareToken?: string) => {
+    set({
+      loadingProject: true,
+      currentProject: null,
+      activeFilePath: null,
+      activeFileContent: null,
+      shareToken: shareToken || null,
+      readOnly: !!shareToken,
+    });
     try {
-      const project = await api.projects.get(id);
+      let project: ProjectWithFiles;
+      if (shareToken) {
+        project = await api.shared.project(shareToken);
+      } else {
+        project = await api.projects.get(id);
+      }
       set({ currentProject: project, loadingProject: false });
 
       // Auto-open the main file
@@ -83,21 +101,25 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   openFile: async (path: string) => {
-    const { currentProject } = get();
+    const { currentProject, shareToken } = get();
     if (!currentProject) return;
 
     try {
-      const data = await api.files.get(currentProject.id, path);
+      let data: { content: string };
+      if (shareToken) {
+        data = await api.shared.fileGet(shareToken, path);
+      } else {
+        data = await api.files.get(currentProject.id, path);
+      }
       set({ activeFilePath: path, activeFileContent: data.content });
     } catch {
-      // File might not exist yet
       set({ activeFilePath: path, activeFileContent: "" });
     }
   },
 
   saveFile: async (path: string, content: string) => {
-    const { currentProject } = get();
-    if (!currentProject) return;
+    const { currentProject, readOnly } = get();
+    if (!currentProject || readOnly) return;
 
     set({ savingFile: true });
     try {
@@ -108,16 +130,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   createFile: async (path: string, content?: string, isDirectory?: boolean) => {
-    const { currentProject, loadProject } = get();
-    if (!currentProject) return;
+    const { currentProject, loadProject, readOnly } = get();
+    if (!currentProject || readOnly) return;
 
     await api.files.create(currentProject.id, path, content, isDirectory);
     await loadProject(currentProject.id);
   },
 
   deleteFile: async (path: string) => {
-    const { currentProject, loadProject } = get();
-    if (!currentProject) return;
+    const { currentProject, loadProject, readOnly } = get();
+    if (!currentProject || readOnly) return;
 
     await api.files.delete(currentProject.id, path);
     await loadProject(currentProject.id);
@@ -128,8 +150,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   updateMainFile: async (mainFile: string) => {
-    const { currentProject } = get();
-    if (!currentProject) return;
+    const { currentProject, readOnly } = get();
+    if (!currentProject || readOnly) return;
 
     await api.projects.update(currentProject.id, { mainFile });
     set({

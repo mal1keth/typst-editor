@@ -44,13 +44,17 @@ async function ensureCompiler(version: string): Promise<TypstCompiler> {
 async function doMount(
   c: TypstCompiler,
   projectId: string,
+  shareToken?: string,
 ): Promise<boolean> {
   if (mounted) return false;
 
-  // Fetch all file contents in a single request — avoids N+1 HTTP calls
-  // and works reliably with httpOnly auth cookies.
+  // Fetch all file contents in a single request.
+  // Use shared endpoint for anonymous access, authenticated endpoint otherwise.
   try {
-    const res = await fetch(`/api/projects/${projectId}/files-all`, { credentials: 'include' });
+    const url = shareToken
+      ? `/api/shared/${shareToken}/files-all`
+      : `/api/projects/${projectId}/files-all`;
+    const res = await fetch(url, { credentials: 'include' });
     if (!res.ok) {
       console.error(`files-all fetch failed: ${res.status} ${res.statusText}`);
       mounted = true;
@@ -90,7 +94,7 @@ self.onmessage = async (e: MessageEvent) => {
       if (msg.needsMount) {
         mounted = false;
       }
-      const justMounted = await doMount(c, msg.projectId);
+      const justMounted = await doMount(c, msg.projectId, msg.shareToken);
 
       // Reset after mount to clear accumulated addSource tracking state.
       // This prevents false "duplicate label" errors from typst.ts 0.7.0-rc2.

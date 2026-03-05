@@ -13,6 +13,11 @@ export default function App() {
     return match ? match[1] : null;
   });
 
+  // Anonymous share link state
+  const [shareToken, setShareToken] = useState<string | null>(null);
+  const [sharedProjectId, setSharedProjectId] = useState<string | null>(null);
+  const [shareError, setShareError] = useState<string | null>(null);
+
   // Sync active project to URL hash
   useEffect(() => {
     if (activeProjectId) {
@@ -31,22 +36,66 @@ export default function App() {
   // Handle share links: /s/:token
   useEffect(() => {
     const path = window.location.pathname;
-    if (path.startsWith("/s/") && user) {
-      const token = path.slice(3);
+    if (!path.startsWith("/s/")) return;
+
+    const token = path.slice(3);
+
+    if (user) {
+      // Logged-in user — join as collaborator
       api.shares.join(token).then((result) => {
         setActiveProjectId(result.projectId);
         window.history.replaceState(null, "", "/");
       }).catch(() => {
-        // Invalid token
         window.history.replaceState(null, "", "/");
       });
+    } else if (!loading) {
+      // Anonymous user — resolve token for read-only access
+      api.shares.resolve(token).then((result) => {
+        setShareToken(token);
+        setSharedProjectId(result.projectId);
+      }).catch(() => {
+        setShareError("Invalid or expired share link");
+      });
     }
-  }, [user]);
+  }, [user, loading]);
 
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-gray-950 text-gray-400">
         Loading...
+      </div>
+    );
+  }
+
+  // Anonymous shared project view
+  if (shareToken && sharedProjectId) {
+    return (
+      <EditorLayout
+        projectId={sharedProjectId}
+        shareToken={shareToken}
+        onBack={() => {
+          setShareToken(null);
+          setSharedProjectId(null);
+          window.history.replaceState(null, "", "/");
+        }}
+      />
+    );
+  }
+
+  // Invalid share link error
+  if (shareError) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-gray-950 text-gray-400">
+        <p>{shareError}</p>
+        <button
+          onClick={() => {
+            setShareError(null);
+            window.history.replaceState(null, "", "/");
+          }}
+          className="rounded bg-gray-800 px-4 py-2 text-sm hover:bg-gray-700"
+        >
+          Go to login
+        </button>
       </div>
     );
   }

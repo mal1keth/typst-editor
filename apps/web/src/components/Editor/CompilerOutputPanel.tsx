@@ -5,21 +5,31 @@ interface Props {
   diagnostics: CompilerDiagnostic[];
   currentError: string | null;
   onClear: () => void;
+  onClose: () => void;
 }
 
-export const CompilerOutputPanel = memo(function CompilerOutputPanel({ diagnostics, currentError, onClear }: Props) {
+export const CompilerOutputPanel = memo(function CompilerOutputPanel({ diagnostics, currentError, onClear, onClose }: Props) {
   return (
     <div className="flex h-full flex-col bg-gray-900 border-t border-gray-800">
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
         <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
           Compiler Output
         </span>
-        <button
-          onClick={onClear}
-          className="text-xs text-gray-500 hover:text-gray-300"
-        >
-          Clear
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onClear}
+            className="text-xs text-gray-500 hover:text-gray-300"
+          >
+            Clear
+          </button>
+          <button
+            onClick={onClose}
+            className="text-xs text-gray-500 hover:text-gray-300"
+            title="Close"
+          >
+            &times;
+          </button>
+        </div>
       </div>
       <div className="flex-1 overflow-auto p-3 font-mono text-xs">
         {currentError && (

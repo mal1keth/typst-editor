@@ -10,6 +10,7 @@ import { ShareDialog } from "@/components/Share/ShareDialog";
 import { Toolbar } from "@/components/Layout/Toolbar";
 import { useProjectStore } from "@/stores/projectStore";
 import { useTypstCompiler, exportPdf, TYPST_VERSION } from "@/hooks/useTypstCompiler";
+import { api } from "@/lib/api";
 import {
   setupCollaboration,
   applyLocalChange,
@@ -23,15 +24,17 @@ function getCookie(name: string): string {
 
 interface Props {
   projectId: string;
+  shareToken?: string;
   onBack: () => void;
 }
 
-export function EditorLayout({ projectId, onBack }: Props) {
+export function EditorLayout({ projectId, shareToken, onBack }: Props) {
   const {
     currentProject,
     activeFilePath,
     loadingProject,
     savingFile,
+    readOnly,
     loadProject,
     openFile,
     saveFile,
@@ -80,6 +83,7 @@ export function EditorLayout({ projectId, onBack }: Props) {
       allFiles,
       currentProject?.mainFile,
       typingUntilRef,
+      shareToken,
     );
 
   // Persist compile mode
@@ -87,7 +91,7 @@ export function EditorLayout({ projectId, onBack }: Props) {
     localStorage.setItem('typst-compile-mode', compileMode);
   }, [compileMode]);
 
-  // Keyboard shortcut: Ctrl+Enter / Cmd+Enter → compile
+  // Keyboard shortcut: Ctrl+Enter / Cmd+Enter -> compile
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -99,13 +103,43 @@ export function EditorLayout({ projectId, onBack }: Props) {
     return () => window.removeEventListener('keydown', handler);
   }, [triggerCompile]);
 
-  useEffect(() => {
-    loadProject(projectId);
-  }, [projectId, loadProject]);
+  const [autoPullStatus, setAutoPullStatus] = useState<string | null>(null);
 
-  // Set up collaboration when file changes
   useEffect(() => {
-    if (!activeFilePath || !currentProject) return;
+    loadProject(projectId, shareToken);
+  }, [projectId, shareToken, loadProject]);
+
+  // Auto-pull from GitHub if project is linked and remote has new commits
+  useEffect(() => {
+    if (shareToken || !currentProject?.githubRepoFullName) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const result = await api.github.autoPull(projectId);
+        if (cancelled) return;
+
+        if (result.pulled) {
+          setAutoPullStatus(`Pulled ${result.fileCount} files from GitHub`);
+          // Reload the project to pick up new files
+          await loadProject(projectId);
+          // Clear the status after a few seconds
+          setTimeout(() => {
+            if (!cancelled) setAutoPullStatus(null);
+          }, 4000);
+        }
+      } catch {
+        // Silent failure — auto-pull is best-effort
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [projectId, currentProject?.githubRepoFullName, shareToken, loadProject]);
+
+  // Set up collaboration when file changes (skip for anonymous share access)
+  useEffect(() => {
+    if (!activeFilePath || !currentProject || shareToken) return;
 
     if (collabRef.current) {
       collabRef.current.destroy();
@@ -138,13 +172,10 @@ export function EditorLayout({ projectId, onBack }: Props) {
         collabRef.current = null;
       }
     };
-  }, [projectId, activeFilePath]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId, activeFilePath, shareToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleChange = useCallback(
     (content: string, changes: ChangeSet) => {
-      // Update ref immediately — compile hook reads this, no re-render triggered.
-      // Do NOT call setActiveFileContent() here — it triggers a Zustand broadcast
-      // that re-renders the entire EditorLayout tree on every keystroke.
       contentRef.current = content;
       typingUntilRef.current = Date.now() + 300;
 
@@ -156,16 +187,18 @@ export function EditorLayout({ projectId, onBack }: Props) {
         applyLocalChange(collabRef.current, changes);
       }
 
-      // Debounced save — syncs store + persists to server after 1.5s of inactivity
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = setTimeout(() => {
-        if (activeFilePath) {
-          setActiveFileContent(content);
-          saveFile(activeFilePath, content);
-        }
-      }, 1500);
+      // Debounced save (skip for read-only)
+      if (!readOnly) {
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = setTimeout(() => {
+          if (activeFilePath) {
+            setActiveFileContent(content);
+            saveFile(activeFilePath, content);
+          }
+        }, 1500);
+      }
     },
-    [activeFilePath, saveFile, setActiveFileContent, triggerCompile, compileMode]
+    [activeFilePath, saveFile, setActiveFileContent, triggerCompile, compileMode, readOnly]
   );
 
   const handleShare = useCallback(() => setShowShare(true), []);
@@ -210,6 +243,8 @@ export function EditorLayout({ projectId, onBack }: Props) {
         showingCompilerOutput={showCompilerOutput}
         compileMode={compileMode}
         compiling={compiling}
+        readOnly={readOnly}
+        autoPullStatus={autoPullStatus}
         onBack={onBack}
         onShare={handleShare}
         onExportPdf={handleExportPdf}
@@ -227,7 +262,7 @@ export function EditorLayout({ projectId, onBack }: Props) {
             <Panel id="sidebar" order={1} defaultSize={15} minSize={10} maxSize={30}>
               <div className="flex h-full flex-col border-r border-gray-800 bg-gray-900">
                 <div className="flex-1 overflow-hidden">
-                  {showGitHub ? (
+                  {showGitHub && !readOnly ? (
                     <GitHubPanel
                       projectId={projectId}
                       onClose={() => setShowGitHub(false)}
@@ -239,34 +274,40 @@ export function EditorLayout({ projectId, onBack }: Props) {
                       activeFilePath={activeFilePath}
                       mainFile={currentProject.mainFile}
                       onSelectFile={openFile}
-                      onCreateFile={handleCreateFile}
-                      onDeleteFile={deleteFile}
-                      onSetMainFile={updateMainFile}
+                      {...(!readOnly && {
+                        onCreateFile: handleCreateFile,
+                        onDeleteFile: deleteFile,
+                        onSetMainFile: updateMainFile,
+                      })}
                     />
                   )}
                 </div>
                 <div className="flex items-center justify-between border-t border-gray-800 px-3 py-2 text-xs text-gray-500">
                   <div className="flex flex-col gap-0.5">
                     <span className="text-gray-600">Typst {TYPST_VERSION.label}</span>
-                    <span>
-                      <span
-                        className={`mr-1.5 inline-block h-2 w-2 rounded-full ${
-                          connected ? "bg-green-500" : "bg-gray-600"
-                        }`}
-                      />
-                      {connected
-                        ? peerCount > 1
-                          ? `${peerCount - 1} peer${peerCount - 1 !== 1 ? "s" : ""}`
-                          : "Connected"
-                        : "Offline"}
-                    </span>
+                    {readOnly ? (
+                      <span className="text-yellow-500">Read only</span>
+                    ) : (
+                      <span>
+                        <span
+                          className={`mr-1.5 inline-block h-2 w-2 rounded-full ${
+                            connected ? "bg-green-500" : "bg-gray-600"
+                          }`}
+                        />
+                        {connected
+                          ? peerCount > 1
+                            ? `${peerCount - 1} peer${peerCount - 1 !== 1 ? "s" : ""}`
+                            : "Connected"
+                          : "Offline"}
+                      </span>
+                    )}
                   </div>
                   <button
                     onClick={() => setSidebarCollapsed(true)}
                     className="text-gray-600 hover:text-gray-300"
                     title="Collapse sidebar"
                   >
-                    ◀
+                    &#9664;
                   </button>
                 </div>
               </div>
@@ -282,7 +323,7 @@ export function EditorLayout({ projectId, onBack }: Props) {
               className="px-1.5 py-1 text-xs text-gray-500 hover:text-gray-300"
               title="Expand sidebar"
             >
-              ▶
+              &#9654;
             </button>
           </div>
         )}
@@ -307,6 +348,7 @@ export function EditorLayout({ projectId, onBack }: Props) {
                         diagnostics={diagnostics}
                         currentError={error}
                         onClear={clearDiagnostics}
+                        onClose={() => setShowCompilerOutput(false)}
                       />
                     </Panel>
                   </>
@@ -333,7 +375,7 @@ export function EditorLayout({ projectId, onBack }: Props) {
         )}
       </PanelGroup>
 
-      {showShare && (
+      {showShare && !readOnly && (
         <ShareDialog
           projectId={projectId}
           onClose={() => setShowShare(false)}
