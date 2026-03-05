@@ -55,12 +55,9 @@ export function EditorLayout({ projectId, onBack }: Props) {
   const [showCompilerOutput, setShowCompilerOutput] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
-  const compileContent = activeFileContent || "";
-  const { svgContent, error, compiling, diagnostics, clearDiagnostics } = useTypstCompiler(
-    compileContent,
+  const { svgContent, error, compiling, diagnostics, clearDiagnostics, triggerCompile } = useTypstCompiler(
     compilerVersion,
     currentProject?.mainFile,
-    activeFilePath ?? undefined,
     projectFiles
   );
 
@@ -121,6 +118,18 @@ export function EditorLayout({ projectId, onBack }: Props) {
     (content: string) => {
       setActiveFileContent(content);
 
+      // Keep projectFiles in sync so the compiler VFS always has latest content
+      if (activeFilePath) {
+        setProjectFiles((prev) =>
+          prev.map((f) =>
+            f.path === activeFilePath ? { ...f, content } : f
+          )
+        );
+      }
+
+      // Trigger recompilation
+      triggerCompile();
+
       // Send to collaborators
       if (collabRef.current && !isRemoteUpdateRef.current) {
         applyLocalChange(collabRef.current, content);
@@ -134,20 +143,20 @@ export function EditorLayout({ projectId, onBack }: Props) {
         }
       }, 1500);
     },
-    [activeFilePath, saveFile, setActiveFileContent]
+    [activeFilePath, saveFile, setActiveFileContent, triggerCompile]
   );
 
   const handleExportPdf = useCallback(async () => {
-    if (!activeFileContent || !currentProject) return;
+    if (!currentProject) return;
     setExportingPdf(true);
     try {
-      await exportPdf(activeFileContent, currentProject.mainFile, compilerVersion, currentProject.mainFile, activeFilePath ?? undefined, projectFiles);
+      await exportPdf(currentProject.mainFile, compilerVersion, currentProject.mainFile, projectFiles);
     } catch (e: any) {
       alert(`PDF export failed: ${e.message}`);
     } finally {
       setExportingPdf(false);
     }
-  }, [activeFileContent, currentProject, compilerVersion, projectFiles]);
+  }, [currentProject, compilerVersion, projectFiles]);
 
   if (loadingProject || !currentProject) {
     return (
