@@ -163,12 +163,12 @@ export function FileTree({
   onSetMainFile,
 }: Props) {
   const [newFileName, setNewFileName] = useState("");
-  const [showInput, setShowInput] = useState(false);
+  const [showInput, setShowInput] = useState<false | "file" | "folder">(false);
   const tree = buildTree(files);
 
   const handleCreate = () => {
     if (!newFileName.trim()) return;
-    const isDir = newFileName.endsWith("/");
+    const isDir = showInput === "folder";
     onCreateFile(newFileName.replace(/\/$/, ""), isDir);
     setNewFileName("");
     setShowInput(false);
@@ -180,13 +180,22 @@ export function FileTree({
         <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
           Files
         </span>
-        <button
-          onClick={() => setShowInput(!showInput)}
-          className="text-lg text-gray-500 hover:text-gray-300"
-          title="New file"
-        >
-          +
-        </button>
+        <div className="flex gap-1">
+          <button
+            onClick={() => setShowInput(showInput === "folder" ? false : "folder")}
+            className={`text-sm ${showInput === "folder" ? "text-blue-400" : "text-gray-500 hover:text-gray-300"}`}
+            title="New folder"
+          >
+            📁
+          </button>
+          <button
+            onClick={() => setShowInput(showInput === "file" ? false : "file")}
+            className={`text-lg leading-none ${showInput === "file" ? "text-blue-400" : "text-gray-500 hover:text-gray-300"}`}
+            title="New file"
+          >
+            +
+          </button>
+        </div>
       </div>
 
       {showInput && (
@@ -199,7 +208,7 @@ export function FileTree({
               if (e.key === "Enter") handleCreate();
               if (e.key === "Escape") setShowInput(false);
             }}
-            placeholder="filename.typ (/ for dir)"
+            placeholder={showInput === "folder" ? "folder name" : "filename.typ"}
             className="w-full rounded border border-gray-700 bg-gray-900 px-2 py-1 text-sm text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
             autoFocus
           />

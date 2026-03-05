@@ -61,6 +61,63 @@ export interface ProjectFile {
   binary: boolean;
 }
 
+// Track which files are already mounted per compiler version to avoid re-mounting unchanged files
+const mountedFilesCache = new Map<string, Map<string, string>>();
+
+async function mountProjectFiles(
+  compiler: any,
+  version: string,
+  files: ProjectFile[],
+  mainPath: string,
+  mainContent: string
+) {
+  let mounted = mountedFilesCache.get(version);
+  if (!mounted) {
+    mounted = new Map();
+    mountedFilesCache.set(version, mounted);
+  }
+
+  // Build a set of current file paths for cleanup
+  const currentPaths = new Set<string>();
+
+  for (const file of files) {
+    const vfsPath = `/${file.path}`;
+    currentPaths.add(vfsPath);
+
+    if (file.binary) {
+      // Always re-mount binary files (we don't cache binary content hashes)
+      const raw = atob(file.content);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      await compiler.mapShadow(vfsPath, bytes);
+      mounted.set(vfsPath, "__binary__");
+    } else {
+      // Only re-mount text files if content changed
+      if (mounted.get(vfsPath) !== file.content) {
+        await compiler.addSource(vfsPath, file.content);
+        mounted.set(vfsPath, file.content);
+      }
+    }
+  }
+
+  // Always update the main file with current editor content
+  currentPaths.add(mainPath);
+  await compiler.addSource(mainPath, mainContent);
+  mounted.set(mainPath, mainContent);
+
+  // Unmap files that were removed from the project
+  for (const [path] of mounted) {
+    if (!currentPaths.has(path)) {
+      try {
+        await compiler.unmapShadow(path);
+      } catch {
+        // ignore
+      }
+      mounted.delete(path);
+    }
+  }
+}
+
 export function useTypstCompiler(
   content: string,
   version: string,
@@ -87,30 +144,14 @@ export function useTypstCompiler(
       try {
         const compiler = await getTypst(version);
 
-        // Mount all project files into the virtual filesystem
         const files = projectFilesRef.current;
         if (files && files.length > 0) {
-          // Reset shadow filesystem to avoid stale files
-          if (compiler.resetShadow) await compiler.resetShadow();
-
-          for (const file of files) {
-            const vfsPath = `/${file.path}`;
-            if (file.binary) {
-              // Decode base64 to Uint8Array
-              const raw = atob(file.content);
-              const bytes = new Uint8Array(raw.length);
-              for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-              await compiler.mapShadow(vfsPath, bytes);
-            } else {
-              await compiler.addSource(vfsPath, file.content);
-            }
-          }
-
-          // Overwrite the main file with current editor content
           const mainPath = mainFilePath ? `/${mainFilePath}` : "/main.typ";
-          await compiler.addSource(mainPath, contentRef.current);
 
-          const svg = await compiler.svg({ mainFilePath: mainPath });
+          await mountProjectFiles(compiler, version, files, mainPath, contentRef.current);
+
+          // Pass root: '/' so the Typst access model allows reading all VFS files
+          const svg = await compiler.svg({ mainFilePath: mainPath, root: '/' });
           setSvgContent(svg);
         } else {
           // No project files — simple single-file mode
@@ -123,7 +164,6 @@ export function useTypstCompiler(
       } catch (e: any) {
         const message = e?.message || String(e);
         setError(message);
-        // Don't clear svgContent — it retains the last successful render
         setDiagnostics((prev) => [
           ...prev.slice(-49),
           { severity: "error" as const, message, timestamp: Date.now() },
@@ -154,21 +194,9 @@ export async function exportPdf(
 
   let pdf: Uint8Array;
   if (projectFiles && projectFiles.length > 0) {
-    if (compiler.resetShadow) await compiler.resetShadow();
-    for (const file of projectFiles) {
-      const vfsPath = `/${file.path}`;
-      if (file.binary) {
-        const raw = atob(file.content);
-        const bytes = new Uint8Array(raw.length);
-        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-        await compiler.mapShadow(vfsPath, bytes);
-      } else {
-        await compiler.addSource(vfsPath, file.content);
-      }
-    }
     const mainPath = mainFilePath ? `/${mainFilePath}` : "/main.typ";
-    await compiler.addSource(mainPath, content);
-    pdf = await compiler.pdf({ mainFilePath: mainPath });
+    await mountProjectFiles(compiler, version, projectFiles, mainPath, content);
+    pdf = await compiler.pdf({ mainFilePath: mainPath, root: '/' });
   } else {
     pdf = await compiler.pdf({ mainContent: content });
   }
