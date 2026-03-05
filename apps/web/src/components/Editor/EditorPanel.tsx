@@ -1,5 +1,5 @@
 import { useRef, useEffect } from "react";
-import { EditorState } from "@codemirror/state";
+import { EditorState, type ChangeSet } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, indentOnInput } from "@codemirror/language";
@@ -8,7 +8,7 @@ import { typst } from "codemirror-lang-typst";
 
 interface EditorPanelProps {
   initialContent: string;
-  onChange: (content: string) => void;
+  onChange: (content: string, changes: ChangeSet) => void;
 }
 
 export function EditorPanel({ initialContent, onChange }: EditorPanelProps) {
@@ -20,7 +20,7 @@ export function EditorPanel({ initialContent, onChange }: EditorPanelProps) {
 
     const updateListener = EditorView.updateListener.of((update) => {
       if (update.docChanged) {
-        onChange(update.state.doc.toString());
+        onChange(update.state.doc.toString(), update.changes);
       }
     });
 
