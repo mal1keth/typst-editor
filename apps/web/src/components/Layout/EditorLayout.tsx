@@ -181,11 +181,11 @@ export function EditorLayout({ projectId, onBack }: Props) {
         onCompilerOutput={() => setShowCompilerOutput(!showCompilerOutput)}
       />
 
-      <PanelGroup direction="horizontal" className="flex-1 overflow-hidden">
+      <PanelGroup direction="horizontal" className="flex-1 overflow-hidden" autoSaveId="editor-layout">
         {/* Sidebar */}
         {!sidebarCollapsed && (
           <>
-            <Panel defaultSize={15} minSize={10} maxSize={30}>
+            <Panel id="sidebar" order={1} defaultSize={15} minSize={10} maxSize={30}>
               <div className="flex h-full flex-col border-r border-gray-800 bg-gray-900">
                 <div className="flex-1 overflow-hidden">
                   {showGitHub ? (
@@ -248,9 +248,9 @@ export function EditorLayout({ projectId, onBack }: Props) {
         {/* Editor + Preview */}
         {activeFilePath ? (
           <>
-            <Panel defaultSize={42} minSize={20}>
-              <PanelGroup direction="vertical">
-                <Panel defaultSize={showCompilerOutput ? 70 : 100} minSize={30}>
+            <Panel id="editor" order={2} defaultSize={42} minSize={20}>
+              <PanelGroup direction="vertical" autoSaveId="editor-vertical">
+                <Panel id="editor-code" order={1} defaultSize={showCompilerOutput ? 70 : 100} minSize={30}>
                   <EditorPanel
                     key={activeFilePath}
                     initialContent={activeFileContent || ""}
@@ -260,7 +260,7 @@ export function EditorLayout({ projectId, onBack }: Props) {
                 {showCompilerOutput && (
                   <>
                     <PanelResizeHandle className="h-1 bg-gray-800 transition-colors hover:bg-blue-600" />
-                    <Panel defaultSize={30} minSize={15}>
+                    <Panel id="compiler-output" order={2} defaultSize={30} minSize={15}>
                       <CompilerOutputPanel
                         diagnostics={diagnostics}
                         currentError={error}
@@ -272,7 +272,7 @@ export function EditorLayout({ projectId, onBack }: Props) {
               </PanelGroup>
             </Panel>
             <PanelResizeHandle className="w-1 bg-gray-800 transition-colors hover:bg-blue-600" />
-            <Panel defaultSize={42} minSize={20}>
+            <Panel id="preview" order={3} defaultSize={42} minSize={20}>
               <PreviewPanel
                 containerRef={previewContainerRef}
                 error={error}
@@ -282,7 +282,7 @@ export function EditorLayout({ projectId, onBack }: Props) {
             </Panel>
           </>
         ) : (
-          <Panel defaultSize={85}>
+          <Panel id="editor" order={2} defaultSize={85}>
             <div className="flex h-full items-center justify-center text-gray-500">
               Select a file to edit
             </div>
