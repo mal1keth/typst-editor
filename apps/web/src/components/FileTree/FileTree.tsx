@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, memo, useMemo } from "react";
 import type { FileEntry } from "@/lib/api";
 
 interface Props {
@@ -232,7 +232,7 @@ function FileTreeNode({
   );
 }
 
-export function FileTree({
+export const FileTree = memo(function FileTree({
   files,
   activeFilePath,
   mainFile,
@@ -248,7 +248,8 @@ export function FileTree({
     y: number;
     node: TreeNode;
   } | null>(null);
-  const tree = buildTree(files);
+  // Memoize tree build — only recomputes when files array changes
+  const tree = useMemo(() => buildTree(files), [files]);
 
   const handleCreate = () => {
     if (!newFileName.trim()) return;
@@ -353,4 +354,4 @@ export function FileTree({
       )}
     </div>
   );
-}
+});

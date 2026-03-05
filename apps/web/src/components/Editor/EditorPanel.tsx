@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, memo } from "react";
 import { EditorState, type ChangeSet } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -11,16 +11,23 @@ interface EditorPanelProps {
   onChange: (content: string, changes: ChangeSet) => void;
 }
 
-export function EditorPanel({ initialContent, onChange }: EditorPanelProps) {
+// React.memo prevents this component from re-rendering when parent state
+// changes (e.g. compiler results, pages, artifactContent). Only re-renders
+// when initialContent or onChange identity changes. Since onChange uses the
+// onChangeRef pattern, it stays stable — so the editor is fully isolated
+// from compilation/preview updates.
+export const EditorPanel = memo(function EditorPanel({ initialContent, onChange }: EditorPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
 
   useEffect(() => {
     if (!containerRef.current) return;
 
     const updateListener = EditorView.updateListener.of((update) => {
       if (update.docChanged) {
-        onChange(update.state.doc.toString(), update.changes);
+        onChangeRef.current(update.state.doc.toString(), update.changes);
       }
     });
 
@@ -59,4 +66,4 @@ export function EditorPanel({ initialContent, onChange }: EditorPanelProps) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return <div ref={containerRef} className="h-full w-full" />;
-}
+});

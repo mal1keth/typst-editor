@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef, useState } from "react";
+import { useEffect, useCallback, useRef, useState, useMemo } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import type { ChangeSet } from "@codemirror/state";
 import { EditorPanel } from "@/components/Editor/EditorPanel";
@@ -27,20 +27,21 @@ interface Props {
 }
 
 export function EditorLayout({ projectId, onBack }: Props) {
-  const {
-    currentProject,
-    activeFilePath,
-    activeFileContent,
-    loadingProject,
-    savingFile,
-    loadProject,
-    openFile,
-    saveFile,
-    createFile,
-    deleteFile,
-    setActiveFileContent,
-    updateMainFile,
-  } = useProjectStore();
+  // Individual selectors: EditorLayout only re-renders when these specific
+  // fields change. Crucially, we do NOT subscribe to `activeFileContent` —
+  // it changes every keystroke and would cause the entire layout to re-render.
+  // Instead, content is tracked via contentRef (updated by handleChange).
+  const currentProject = useProjectStore(s => s.currentProject);
+  const activeFilePath = useProjectStore(s => s.activeFilePath);
+  const loadingProject = useProjectStore(s => s.loadingProject);
+  const savingFile = useProjectStore(s => s.savingFile);
+  const loadProject = useProjectStore(s => s.loadProject);
+  const openFile = useProjectStore(s => s.openFile);
+  const saveFile = useProjectStore(s => s.saveFile);
+  const createFile = useProjectStore(s => s.createFile);
+  const deleteFile = useProjectStore(s => s.deleteFile);
+  const setActiveFileContent = useProjectStore(s => s.setActiveFileContent);
+  const updateMainFile = useProjectStore(s => s.updateMainFile);
 
   const [showGitHub, setShowGitHub] = useState(false);
   const [showShare, setShowShare] = useState(false);
@@ -54,23 +55,52 @@ export function EditorLayout({ projectId, onBack }: Props) {
 
   const [showCompilerOutput, setShowCompilerOutput] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [compileMode, setCompileMode] = useState<'live' | 'manual'>(() =>
+    (localStorage.getItem('typst-compile-mode') as 'live' | 'manual') || 'manual'
+  );
 
-  // Canvas container ref for the typst.ts renderer
-  const previewContainerRef = useRef<HTMLDivElement>(null);
-
-  const compileContent = activeFileContent || "";
   const allFiles = currentProject?.files || [];
 
-  const { error, compiling, diagnostics, clearDiagnostics, pages, triggerCompile } =
+  // Content ref — always has the latest file content, updated by handleChange
+  // and collab callbacks. Read by the compile hook without triggering re-renders.
+  const contentRef = useRef<string | null>(null);
+
+  // Stable initial content — only recomputes when switching files.
+  // Reads from the store non-reactively (getState) so keystroke-driven
+  // store updates don't trigger EditorLayout re-renders.
+  const editorInitialContent = useMemo(() => {
+    const content = useProjectStore.getState().activeFileContent;
+    contentRef.current = content;
+    return content || "";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFilePath]);
+
+  const { error, compiling, diagnostics, clearDiagnostics, pages, artifactContent, renderer, triggerCompile } =
     useTypstCompiler(
       projectId,
       activeFilePath,
-      compileContent,
+      contentRef,
       allFiles,
       compilerVersion,
-      previewContainerRef,
       currentProject?.mainFile,
     );
+
+  // Persist compile mode
+  useEffect(() => {
+    localStorage.setItem('typst-compile-mode', compileMode);
+  }, [compileMode]);
+
+  // Keyboard shortcut: Ctrl+Enter / Cmd+Enter → compile
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        triggerCompile();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [triggerCompile]);
 
   useEffect(() => {
     loadProject(projectId);
@@ -90,11 +120,12 @@ export function EditorLayout({ projectId, onBack }: Props) {
     const collab = setupCollaboration(
       projectId,
       activeFilePath,
-      activeFileContent || "",
+      contentRef.current || "",
       token,
       (content) => {
         // Remote update received
         isRemoteUpdateRef.current = true;
+        contentRef.current = content;
         setActiveFileContent(content);
         isRemoteUpdateRef.current = false;
       },
@@ -116,10 +147,13 @@ export function EditorLayout({ projectId, onBack }: Props) {
 
   const handleChange = useCallback(
     (content: string, changes: ChangeSet) => {
+      contentRef.current = content;
       setActiveFileContent(content);
 
-      // Trigger recompilation
-      triggerCompile();
+      // Trigger recompilation only in live mode
+      if (compileMode === 'live') {
+        triggerCompile();
+      }
 
       // Send diff-based update to collaborators (not full content)
       if (collabRef.current && !isRemoteUpdateRef.current) {
@@ -134,11 +168,21 @@ export function EditorLayout({ projectId, onBack }: Props) {
         }
       }, 1500);
     },
-    [activeFilePath, saveFile, setActiveFileContent, triggerCompile]
+    [activeFilePath, saveFile, setActiveFileContent, triggerCompile, compileMode]
+  );
+
+  // Stable callback refs — extracted from inline arrows so memo'd children
+  // don't re-render on every parent re-render (which happens every keystroke)
+  const handleShare = useCallback(() => setShowShare(true), []);
+  const handleToggleGitHub = useCallback(() => setShowGitHub(prev => !prev), []);
+  const handleToggleCompilerOutput = useCallback(() => setShowCompilerOutput(prev => !prev), []);
+  const handleCreateFile = useCallback(
+    (path: string, isDir?: boolean) => createFile(path, isDir ? undefined : "", isDir),
+    [createFile]
   );
 
   const handleExportPdf = useCallback(async () => {
-    if (!activeFileContent || !currentProject) return;
+    if (!contentRef.current || !currentProject) return;
     setExportingPdf(true);
     try {
       await exportPdf(
@@ -153,7 +197,7 @@ export function EditorLayout({ projectId, onBack }: Props) {
     } finally {
       setExportingPdf(false);
     }
-  }, [activeFileContent, currentProject, compilerVersion, projectId]);
+  }, [currentProject, compilerVersion, projectId]);
 
   if (loadingProject || !currentProject) {
     return (
@@ -172,13 +216,17 @@ export function EditorLayout({ projectId, onBack }: Props) {
         compilerVersion={compilerVersion}
         errorCount={error ? 1 : 0}
         showingCompilerOutput={showCompilerOutput}
+        compileMode={compileMode}
+        compiling={compiling}
         onBack={onBack}
-        onShare={() => setShowShare(true)}
+        onShare={handleShare}
         onExportPdf={handleExportPdf}
         exportingPdf={exportingPdf}
-        onGitHub={() => setShowGitHub(!showGitHub)}
+        onGitHub={handleToggleGitHub}
         onVersionChange={setCompilerVersion}
-        onCompilerOutput={() => setShowCompilerOutput(!showCompilerOutput)}
+        onCompilerOutput={handleToggleCompilerOutput}
+        onCompileModeChange={setCompileMode}
+        onCompile={triggerCompile}
       />
 
       <PanelGroup direction="horizontal" className="flex-1 overflow-hidden" autoSaveId="editor-layout">
@@ -200,9 +248,7 @@ export function EditorLayout({ projectId, onBack }: Props) {
                       activeFilePath={activeFilePath}
                       mainFile={currentProject.mainFile}
                       onSelectFile={openFile}
-                      onCreateFile={(path, isDir) =>
-                        createFile(path, isDir ? undefined : "", isDir)
-                      }
+                      onCreateFile={handleCreateFile}
                       onDeleteFile={deleteFile}
                       onSetMainFile={updateMainFile}
                     />
@@ -253,7 +299,7 @@ export function EditorLayout({ projectId, onBack }: Props) {
                 <Panel id="editor-code" order={1} defaultSize={showCompilerOutput ? 70 : 100} minSize={30}>
                   <EditorPanel
                     key={activeFilePath}
-                    initialContent={activeFileContent || ""}
+                    initialContent={editorInitialContent}
                     onChange={handleChange}
                   />
                 </Panel>
@@ -274,10 +320,11 @@ export function EditorLayout({ projectId, onBack }: Props) {
             <PanelResizeHandle className="w-1 bg-gray-800 transition-colors hover:bg-blue-600" />
             <Panel id="preview" order={3} defaultSize={42} minSize={20}>
               <PreviewPanel
-                containerRef={previewContainerRef}
                 error={error}
                 compiling={compiling}
                 pages={pages}
+                artifactContent={artifactContent}
+                renderer={renderer}
               />
             </Panel>
           </>

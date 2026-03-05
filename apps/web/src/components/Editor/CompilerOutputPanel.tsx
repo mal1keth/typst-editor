@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { CompilerDiagnostic } from "@/hooks/useTypstCompiler";
 
 interface Props {
@@ -6,7 +7,7 @@ interface Props {
   onClear: () => void;
 }
 
-export function CompilerOutputPanel({ diagnostics, currentError, onClear }: Props) {
+export const CompilerOutputPanel = memo(function CompilerOutputPanel({ diagnostics, currentError, onClear }: Props) {
   return (
     <div className="flex h-full flex-col bg-gray-900 border-t border-gray-800">
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
@@ -48,4 +49,4 @@ export function CompilerOutputPanel({ diagnostics, currentError, onClear }: Prop
       </div>
     </div>
   );
-}
+});
