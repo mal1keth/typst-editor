@@ -1,0 +1,11 @@
+node_modules
+dist
+.env
+.env.local
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+**/data/projects/
+.turbo
+.claude/

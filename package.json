@@ -1,0 +1,16 @@
+{
+  "name": "typst-editor",
+  "private": true,
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "type-check": "turbo type-check"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "better-sqlite3"]
+  },
+  "devDependencies": {
+    "turbo": "^2"
+  }
+}

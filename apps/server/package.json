@@ -1,0 +1,32 @@
+{
+  "name": "@typst-editor/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "type-check": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1",
+    "@hono/node-ws": "^1",
+    "better-sqlite3": "^11",
+    "drizzle-orm": "^0.39",
+    "hono": "^4",
+    "jose": "^6",
+    "nanoid": "^5",
+    "octokit": "^4",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.29",
+    "zod": "^3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7",
+    "drizzle-kit": "^0.30",
+    "tsx": "^4",
+    "typescript": "^5.7"
+  }
+}
