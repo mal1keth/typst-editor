@@ -1,4 +1,5 @@
 import * as Y from "yjs";
+import type { ChangeSet } from "@codemirror/state";
 
 export interface CollabState {
   doc: Y.Doc;
@@ -94,16 +95,32 @@ export function setupCollaboration(
   return state;
 }
 
+/**
+ * Apply local changes using CodeMirror's ChangeSet for minimal CRDT diffs.
+ * Instead of delete-all/insert-all, we apply only the changed ranges.
+ */
 export function applyLocalChange(
   state: CollabState,
-  newContent: string
+  changes: ChangeSet
 ) {
   const { doc, ytext, ws } = state;
 
-  // Capture the update
   doc.transact(() => {
-    ytext.delete(0, ytext.length);
-    ytext.insert(0, newContent);
+    let offset = 0;
+    changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+      const deleteLen = toA - fromA;
+      const adjustedPos = fromA + offset;
+
+      if (deleteLen > 0) {
+        ytext.delete(adjustedPos, deleteLen);
+      }
+      const insertText = inserted.toString();
+      if (insertText.length > 0) {
+        ytext.insert(adjustedPos, insertText);
+      }
+
+      offset += insertText.length - deleteLen;
+    });
   });
 
   // Send update to server

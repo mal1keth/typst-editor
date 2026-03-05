@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import type { ChangeSet } from "@codemirror/state";
 import { EditorPanel } from "@/components/Editor/EditorPanel";
 import { CompilerOutputPanel } from "@/components/Editor/CompilerOutputPanel";
 import { PreviewPanel } from "@/components/Preview/PreviewPanel";
@@ -52,8 +53,22 @@ export function EditorLayout({ projectId, onBack }: Props) {
   const isRemoteUpdateRef = useRef(false);
 
   const [showCompilerOutput, setShowCompilerOutput] = useState(false);
+
+  // Canvas container ref for the typst.ts renderer
+  const previewContainerRef = useRef<HTMLDivElement>(null);
+
   const compileContent = activeFileContent || "";
-  const { svgContent, error, compiling, diagnostics, clearDiagnostics } = useTypstCompiler(compileContent, compilerVersion);
+  const allFiles = currentProject?.files || [];
+
+  const { error, compiling, diagnostics, clearDiagnostics, pages } =
+    useTypstCompiler(
+      projectId,
+      activeFilePath,
+      compileContent,
+      allFiles,
+      compilerVersion,
+      previewContainerRef
+    );
 
   useEffect(() => {
     loadProject(projectId);
@@ -98,12 +113,12 @@ export function EditorLayout({ projectId, onBack }: Props) {
   }, [projectId, activeFilePath]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleChange = useCallback(
-    (content: string) => {
+    (content: string, changes: ChangeSet) => {
       setActiveFileContent(content);
 
-      // Send to collaborators
+      // Send diff-based update to collaborators (not full content)
       if (collabRef.current && !isRemoteUpdateRef.current) {
-        applyLocalChange(collabRef.current, content);
+        applyLocalChange(collabRef.current, changes);
       }
 
       // Auto-save after 1.5s of inactivity
@@ -121,13 +136,19 @@ export function EditorLayout({ projectId, onBack }: Props) {
     if (!activeFileContent || !currentProject) return;
     setExportingPdf(true);
     try {
-      await exportPdf(activeFileContent, currentProject.mainFile, compilerVersion);
+      await exportPdf(
+        projectId,
+        currentProject.files,
+        currentProject.mainFile,
+        currentProject.mainFile,
+        compilerVersion
+      );
     } catch (e: any) {
       alert(`PDF export failed: ${e.message}`);
     } finally {
       setExportingPdf(false);
     }
-  }, [activeFileContent, currentProject, compilerVersion]);
+  }, [activeFileContent, currentProject, compilerVersion, projectId]);
 
   if (loadingProject || !currentProject) {
     return (
@@ -221,9 +242,10 @@ export function EditorLayout({ projectId, onBack }: Props) {
             <PanelResizeHandle className="w-1 bg-gray-800 transition-colors hover:bg-blue-600" />
             <Panel defaultSize={50} minSize={25}>
               <PreviewPanel
-                svgContent={svgContent}
+                containerRef={previewContainerRef}
                 error={error}
                 compiling={compiling}
+                pages={pages}
               />
             </Panel>
           </PanelGroup>
