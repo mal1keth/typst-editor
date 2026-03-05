@@ -37,6 +37,4 @@ ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
 
-VOLUME ["/app/apps/server/data"]
-
 CMD ["pnpm", "--filter", "@typst-editor/server", "dev"]
