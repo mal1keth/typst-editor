@@ -98,7 +98,7 @@ export function PreviewPanel({
           overflow:hidden on .typst-page clips the text selection layer. */}
       <div
         ref={containerRef}
-        className="mx-auto [&_.typst-page]:overflow-hidden [&_.typst-page]:relative [&_.typst-html-semantics]:absolute [&_.typst-html-semantics]:inset-0 [&_.typst-html-semantics]:text-transparent [&_.typst-html-semantics]:select-text"
+        className="mx-auto [&_.typst-page]:overflow-hidden [&_.typst-page]:relative [&_.typst-html-semantics]:absolute [&_.typst-html-semantics]:inset-0 [&_.typst-html-semantics]:opacity-0"
         style={{
           zoom: zoom !== 1 ? zoom : undefined,
           padding: `${padding / 2}px`,
