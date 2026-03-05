@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect } from "react";
+import { useRef, useState, useCallback } from "react";
 
 interface PreviewPanelProps {
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -15,32 +15,8 @@ export function PreviewPanel({
 }: PreviewPanelProps) {
   const outerRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
-  const [containerWidth, setContainerWidth] = useState(0);
 
-  // Track container width for fit-to-width scaling
-  useEffect(() => {
-    const el = outerRef.current;
-    if (!el) return;
-
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setContainerWidth(entry.contentRect.width);
-      }
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  // Compute fit-to-width scale factor
-  const maxPageWidth = pages.length > 0
-    ? Math.max(...pages.map((p) => p.width))
-    : 595; // default A4 width in pt
-
-  // The typst.ts renderer uses pixelPerPt=2, so actual pixel width = pageWidth * 2
   const padding = 32;
-  const availableWidth = Math.max(containerWidth - padding, 100);
-  const baseScale = availableWidth / (maxPageWidth * 2);
-  const effectiveScale = baseScale * zoom;
 
   // Handle zoom via Ctrl+scroll
   const handleWheel = useCallback(
@@ -69,7 +45,7 @@ export function PreviewPanel({
   return (
     <div
       ref={outerRef}
-      className="relative h-full w-full overflow-auto bg-gray-200"
+      className="relative h-full w-full overflow-auto bg-white"
       onWheel={handleWheel}
     >
       {/* Status indicators */}
@@ -79,11 +55,8 @@ export function PreviewPanel({
         </div>
       )}
       {error && (
-        <div className="absolute left-3 top-3 z-10 max-w-[80%] rounded border border-red-500/50 bg-red-950/90 px-2 py-1 text-xs text-red-300">
-          <div className="font-medium">Compilation error</div>
-          <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[10px]">
-            {error}
-          </pre>
+        <div className="absolute right-3 top-3 z-10 rounded bg-red-900/80 px-2 py-1 text-xs text-red-300" title={error}>
+          Error
         </div>
       )}
 
@@ -119,13 +92,15 @@ export function PreviewPanel({
         </div>
       )}
 
-      {/* Render container — typst.ts renderToCanvas populates this */}
+      {/* Render container — typst.ts renderToCanvas populates this.
+          The renderer handles fit-to-width internally.
+          CSS zoom is only applied for manual user zoom controls.
+          overflow:hidden on .typst-page clips the text selection layer. */}
       <div
         ref={containerRef}
-        className="mx-auto"
+        className="mx-auto [&_.typst-page]:overflow-hidden"
         style={{
-          transformOrigin: "top center",
-          transform: `scale(${effectiveScale})`,
+          zoom: zoom !== 1 ? zoom : undefined,
           padding: `${padding / 2}px`,
         }}
       />
