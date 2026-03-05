@@ -214,14 +214,6 @@ function FileTreeNode({
       >
         <FileIcon isMain={isMain} />
         <span className="truncate">{node.name}</span>
-        {isMain && (
-          <span
-            className="ml-auto shrink-0 rounded bg-yellow-600/20 px-1 py-0.5 font-mono text-[10px] leading-none text-yellow-500"
-            title="Main compile file"
-          >
-            main
-          </span>
-        )}
       </button>
       {showSetMain && (
         <button

@@ -33,7 +33,6 @@ async function getTypst(version: string) {
   const cached = compilerCache.get(version);
   if (cached) return cached;
 
-  // Load the JS wrapper from esm.sh which resolves bare module specifiers
   const snippetUrl = `https://esm.sh/@myriaddreamin/typst.ts@${version}/dist/esm/contrib/snippet.mjs`;
   const mod = await import(/* @vite-ignore */ snippetUrl);
   const $typst = mod.$typst;
@@ -67,15 +66,13 @@ export interface ProjectFile {
   binary: boolean;
 }
 
-// Track which files are already mounted per compiler version to avoid re-mounting unchanged files
+// Track mounted VFS files per compiler version
 const mountedFilesCache = new Map<string, Map<string, string>>();
 
-async function mountProjectFiles(
+async function mountAllFiles(
   compiler: any,
   version: string,
   files: ProjectFile[],
-  activeFilePath: string,
-  activeContent: string
 ) {
   let mounted = mountedFilesCache.get(version);
   if (!mounted) {
@@ -83,25 +80,19 @@ async function mountProjectFiles(
     mountedFilesCache.set(version, mounted);
   }
 
-  // Build a set of current file paths for cleanup
   const currentPaths = new Set<string>();
 
   for (const file of files) {
     const vfsPath = `/${file.path}`;
     currentPaths.add(vfsPath);
 
-    // Skip the active file here — we'll mount it with the editor's live content below
-    if (vfsPath === activeFilePath) continue;
-
     if (file.binary) {
-      // Always re-mount binary files (we don't cache binary content hashes)
       const raw = atob(file.content);
       const bytes = new Uint8Array(raw.length);
       for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
       await compiler.mapShadow(vfsPath, bytes);
       mounted.set(vfsPath, "__binary__");
     } else {
-      // Only re-mount text files if content changed
       if (mounted.get(vfsPath) !== file.content) {
         await compiler.addSource(vfsPath, file.content);
         mounted.set(vfsPath, file.content);
@@ -109,68 +100,76 @@ async function mountProjectFiles(
     }
   }
 
-  // Always update the active file with current editor content
-  currentPaths.add(activeFilePath);
-  await compiler.addSource(activeFilePath, activeContent);
-  mounted.set(activeFilePath, activeContent);
-
-  // Unmap files that were removed from the project
+  // Unmap removed files
   for (const [path] of mounted) {
     if (!currentPaths.has(path)) {
-      try {
-        await compiler.unmapShadow(path);
-      } catch {
-        // ignore
-      }
+      try { await compiler.unmapShadow(path); } catch {}
       mounted.delete(path);
     }
   }
 }
 
+async function doCompile(
+  version: string,
+  mainFilePath: string | undefined,
+  projectFiles: ProjectFile[] | undefined,
+): Promise<string> {
+  const compiler = await getTypst(version);
+
+  if (projectFiles && projectFiles.length > 0) {
+    const mainPath = mainFilePath ? `/${mainFilePath}` : "/main.typ";
+    await mountAllFiles(compiler, version, projectFiles);
+    return await compiler.svg({ mainFilePath: mainPath, root: "/" });
+  } else {
+    // Single-file mode: find main file content
+    return await compiler.svg({ mainContent: "" });
+  }
+}
+
 export function useTypstCompiler(
-  content: string,
   version: string,
   mainFilePath?: string,
-  activeFilePath?: string,
-  projectFiles?: ProjectFile[]
+  projectFiles?: ProjectFile[],
 ) {
   const [svgContent, setSvgContent] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [compiling, setCompiling] = useState(false);
   const [diagnostics, setDiagnostics] = useState<CompilerDiagnostic[]>([]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const contentRef = useRef(content);
   const projectFilesRef = useRef(projectFiles);
-  contentRef.current = content;
   projectFilesRef.current = projectFiles;
 
+  // Compile trigger — increment to request a new compilation
+  const [compileSeq, setCompileSeq] = useState(0);
+
+  // Trigger recompile from parent (on edit, file save, etc.)
+  const triggerCompile = useCallback(() => {
+    setCompileSeq((s) => s + 1);
+  }, []);
+
+  // Recompile when version or mainFilePath changes
   useEffect(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
+    setCompileSeq((s) => s + 1);
+  }, [version, mainFilePath]);
+
+  // Recompile when projectFiles change (initial load or file added/deleted)
+  useEffect(() => {
+    if (projectFiles && projectFiles.length > 0) {
+      setCompileSeq((s) => s + 1);
     }
+  }, [projectFiles]);
+
+  // The actual compile effect
+  useEffect(() => {
+    if (compileSeq === 0) return;
+
+    if (timerRef.current) clearTimeout(timerRef.current);
 
     timerRef.current = setTimeout(async () => {
       setCompiling(true);
       try {
-        const compiler = await getTypst(version);
-
-        const files = projectFilesRef.current;
-        if (files && files.length > 0) {
-          const mainPath = mainFilePath ? `/${mainFilePath}` : "/main.typ";
-          // The file currently open in the editor — update it with live content
-          const editingPath = activeFilePath ? `/${activeFilePath}` : mainPath;
-
-          await mountProjectFiles(compiler, version, files, editingPath, contentRef.current);
-
-          // Always compile from the main file
-          const svg = await compiler.svg({ mainFilePath: mainPath, root: '/' });
-          setSvgContent(svg);
-        } else {
-          // No project files — simple single-file mode
-          const svg = await compiler.svg({ mainContent: contentRef.current });
-          setSvgContent(svg);
-        }
-
+        const svg = await doCompile(version, mainFilePath, projectFilesRef.current);
+        setSvgContent(svg);
         setError(null);
         setDiagnostics([]);
       } catch (e: any) {
@@ -188,31 +187,28 @@ export function useTypstCompiler(
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [content, version, mainFilePath, activeFilePath]);
+  }, [compileSeq, version, mainFilePath]);
 
   const clearDiagnostics = useCallback(() => setDiagnostics([]), []);
 
-  return { svgContent, error, compiling, diagnostics, clearDiagnostics };
+  return { svgContent, error, compiling, diagnostics, clearDiagnostics, triggerCompile };
 }
 
 export async function exportPdf(
-  content: string,
   filename: string,
   version: string,
   mainFilePath?: string,
-  activeFilePath?: string,
-  projectFiles?: ProjectFile[]
+  projectFiles?: ProjectFile[],
 ) {
   const compiler = await getTypst(version);
 
   let pdf: Uint8Array;
   if (projectFiles && projectFiles.length > 0) {
     const mainPath = mainFilePath ? `/${mainFilePath}` : "/main.typ";
-    const editingPath = activeFilePath ? `/${activeFilePath}` : mainPath;
-    await mountProjectFiles(compiler, version, projectFiles, editingPath, content);
-    pdf = await compiler.pdf({ mainFilePath: mainPath, root: '/' });
+    await mountAllFiles(compiler, version, projectFiles);
+    pdf = await compiler.pdf({ mainFilePath: mainPath, root: "/" });
   } else {
-    pdf = await compiler.pdf({ mainContent: content });
+    pdf = await compiler.pdf({ mainContent: "" });
   }
 
   const blob = new Blob([pdf as BlobPart], { type: "application/pdf" });
