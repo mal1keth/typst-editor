@@ -182,7 +182,6 @@ export function EditorLayout({ projectId, onBack }: Props) {
     try {
       await exportPdf(
         projectId,
-        currentProject.files,
         currentProject.mainFile,
         currentProject.mainFile,
       );
