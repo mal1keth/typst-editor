@@ -55,14 +55,27 @@ export interface CompilerDiagnostic {
   timestamp: number;
 }
 
-export function useTypstCompiler(content: string, version: string) {
+export interface ProjectFile {
+  path: string;
+  content: string;
+  binary: boolean;
+}
+
+export function useTypstCompiler(
+  content: string,
+  version: string,
+  mainFilePath?: string,
+  projectFiles?: ProjectFile[]
+) {
   const [svgContent, setSvgContent] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [compiling, setCompiling] = useState(false);
   const [diagnostics, setDiagnostics] = useState<CompilerDiagnostic[]>([]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentRef = useRef(content);
+  const projectFilesRef = useRef(projectFiles);
   contentRef.current = content;
+  projectFilesRef.current = projectFiles;
 
   useEffect(() => {
     if (timerRef.current) {
@@ -73,8 +86,38 @@ export function useTypstCompiler(content: string, version: string) {
       setCompiling(true);
       try {
         const compiler = await getTypst(version);
-        const svg = await compiler.svg({ mainContent: contentRef.current });
-        setSvgContent(svg);
+
+        // Mount all project files into the virtual filesystem
+        const files = projectFilesRef.current;
+        if (files && files.length > 0) {
+          // Reset shadow filesystem to avoid stale files
+          if (compiler.resetShadow) await compiler.resetShadow();
+
+          for (const file of files) {
+            const vfsPath = `/${file.path}`;
+            if (file.binary) {
+              // Decode base64 to Uint8Array
+              const raw = atob(file.content);
+              const bytes = new Uint8Array(raw.length);
+              for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+              await compiler.mapShadow(vfsPath, bytes);
+            } else {
+              await compiler.addSource(vfsPath, file.content);
+            }
+          }
+
+          // Overwrite the main file with current editor content
+          const mainPath = mainFilePath ? `/${mainFilePath}` : "/main.typ";
+          await compiler.addSource(mainPath, contentRef.current);
+
+          const svg = await compiler.svg({ mainFilePath: mainPath });
+          setSvgContent(svg);
+        } else {
+          // No project files — simple single-file mode
+          const svg = await compiler.svg({ mainContent: contentRef.current });
+          setSvgContent(svg);
+        }
+
         setError(null);
         setDiagnostics([]);
       } catch (e: any) {
@@ -93,7 +136,7 @@ export function useTypstCompiler(content: string, version: string) {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [content, version]);
+  }, [content, version, mainFilePath]);
 
   const clearDiagnostics = useCallback(() => setDiagnostics([]), []);
 
@@ -103,11 +146,34 @@ export function useTypstCompiler(content: string, version: string) {
 export async function exportPdf(
   content: string,
   filename: string,
-  version: string
+  version: string,
+  mainFilePath?: string,
+  projectFiles?: ProjectFile[]
 ) {
   const compiler = await getTypst(version);
-  const pdf = await compiler.pdf({ mainContent: content });
-  const blob = new Blob([pdf], { type: "application/pdf" });
+
+  let pdf: Uint8Array;
+  if (projectFiles && projectFiles.length > 0) {
+    if (compiler.resetShadow) await compiler.resetShadow();
+    for (const file of projectFiles) {
+      const vfsPath = `/${file.path}`;
+      if (file.binary) {
+        const raw = atob(file.content);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        await compiler.mapShadow(vfsPath, bytes);
+      } else {
+        await compiler.addSource(vfsPath, file.content);
+      }
+    }
+    const mainPath = mainFilePath ? `/${mainFilePath}` : "/main.typ";
+    await compiler.addSource(mainPath, content);
+    pdf = await compiler.pdf({ mainFilePath: mainPath });
+  } else {
+    pdf = await compiler.pdf({ mainContent: content });
+  }
+
+  const blob = new Blob([pdf as BlobPart], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

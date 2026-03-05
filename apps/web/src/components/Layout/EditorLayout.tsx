@@ -8,7 +8,8 @@ import { GitHubPanel } from "@/components/GitHub/GitHubPanel";
 import { ShareDialog } from "@/components/Share/ShareDialog";
 import { Toolbar } from "@/components/Layout/Toolbar";
 import { useProjectStore } from "@/stores/projectStore";
-import { useTypstCompiler, exportPdf, getSelectedVersion } from "@/hooks/useTypstCompiler";
+import { useTypstCompiler, exportPdf, getSelectedVersion, type ProjectFile } from "@/hooks/useTypstCompiler";
+import { api } from "@/lib/api";
 import {
   setupCollaboration,
   applyLocalChange,
@@ -52,12 +53,29 @@ export function EditorLayout({ projectId, onBack }: Props) {
   const isRemoteUpdateRef = useRef(false);
 
   const [showCompilerOutput, setShowCompilerOutput] = useState(false);
+  const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
   const compileContent = activeFileContent || "";
-  const { svgContent, error, compiling, diagnostics, clearDiagnostics } = useTypstCompiler(compileContent, compilerVersion);
+  const { svgContent, error, compiling, diagnostics, clearDiagnostics } = useTypstCompiler(
+    compileContent,
+    compilerVersion,
+    currentProject?.mainFile,
+    projectFiles
+  );
 
   useEffect(() => {
     loadProject(projectId);
   }, [projectId, loadProject]);
+
+  // Fetch all file contents for the compiler's virtual filesystem
+  useEffect(() => {
+    if (!currentProject) return;
+    api.files.getAll(currentProject.id).then((data) => {
+      setProjectFiles(data.files);
+    }).catch(() => {
+      // Fallback: no project files, single-file mode
+      setProjectFiles([]);
+    });
+  }, [currentProject?.id, currentProject?.files.length]);
 
   // Set up collaboration when file changes
   useEffect(() => {
@@ -121,13 +139,13 @@ export function EditorLayout({ projectId, onBack }: Props) {
     if (!activeFileContent || !currentProject) return;
     setExportingPdf(true);
     try {
-      await exportPdf(activeFileContent, currentProject.mainFile, compilerVersion);
+      await exportPdf(activeFileContent, currentProject.mainFile, compilerVersion, currentProject.mainFile, projectFiles);
     } catch (e: any) {
       alert(`PDF export failed: ${e.message}`);
     } finally {
       setExportingPdf(false);
     }
-  }, [activeFileContent, currentProject, compilerVersion]);
+  }, [activeFileContent, currentProject, compilerVersion, projectFiles]);
 
   if (loadingProject || !currentProject) {
     return (
