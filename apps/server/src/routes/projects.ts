@@ -163,9 +163,8 @@ projects.get(
   requireProjectAccess("read"),
   async (c) => {
     const projectId = c.req.param("projectId");
-    const filePath = c.req.path.replace(
-      `/api/projects/${projectId}/files/`,
-      ""
+    const filePath = decodeURIComponent(
+      c.req.path.replace(`/api/projects/${projectId}/files/`, "")
     );
 
     if (!filePath) {
@@ -201,9 +200,8 @@ projects.put(
   requireProjectAccess("write"),
   async (c) => {
     const projectId = c.req.param("projectId");
-    const filePath = c.req.path.replace(
-      `/api/projects/${projectId}/files/`,
-      ""
+    const filePath = decodeURIComponent(
+      c.req.path.replace(`/api/projects/${projectId}/files/`, "")
     );
 
     if (!filePath) {
@@ -288,9 +286,8 @@ projects.delete(
   requireProjectAccess("write"),
   async (c) => {
     const projectId = c.req.param("projectId");
-    const filePath = c.req.path.replace(
-      `/api/projects/${projectId}/files/`,
-      ""
+    const filePath = decodeURIComponent(
+      c.req.path.replace(`/api/projects/${projectId}/files/`, "")
     );
 
     if (!filePath) {

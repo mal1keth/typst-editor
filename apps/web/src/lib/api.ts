@@ -1,5 +1,10 @@
 const BASE = "/api";
 
+// Encode file path for URL: encode each segment separately to preserve slashes
+function encodeFilePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
 async function request<T>(
   path: string,
   options?: RequestInit
@@ -64,10 +69,10 @@ export const api = {
   files: {
     get: (projectId: string, path: string) =>
       request<{ path: string; content: string }>(
-        `/projects/${projectId}/files/${path}`
+        `/projects/${projectId}/files/${encodeFilePath(path)}`
       ),
     put: (projectId: string, path: string, content: string) =>
-      request<{ ok: boolean }>(`/projects/${projectId}/files/${path}`, {
+      request<{ ok: boolean }>(`/projects/${projectId}/files/${encodeFilePath(path)}`, {
         method: "PUT",
         body: JSON.stringify({ content }),
       }),
@@ -82,7 +87,7 @@ export const api = {
         body: JSON.stringify({ path, content, isDirectory }),
       }),
     delete: (projectId: string, path: string) =>
-      request<{ ok: boolean }>(`/projects/${projectId}/files/${path}`, {
+      request<{ ok: boolean }>(`/projects/${projectId}/files/${encodeFilePath(path)}`, {
         method: "DELETE",
       }),
   },
