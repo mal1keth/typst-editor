@@ -81,7 +81,7 @@ function getWorker(): Worker {
   return workerInstance;
 }
 
-function sendToWorker(msg: Record<string, any>, timeoutMs = 30000): Promise<any> {
+function sendToWorker(msg: Record<string, any>, timeoutMs = 60000): Promise<any> {
   return new Promise((resolve, reject) => {
     const id = workerNextId++;
     const timer = setTimeout(() => {
