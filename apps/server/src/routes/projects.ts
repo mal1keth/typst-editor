@@ -392,6 +392,35 @@ projects.delete(
   }
 );
 
+// Download file (always returns raw content with Content-Disposition: attachment)
+projects.get(
+  "/:projectId/download/*",
+  requireProjectAccess("read"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const filePath = decodeURIComponent(
+      c.req.path.replace(`/api/projects/${projectId}/download/`, "")
+    );
+
+    if (!filePath) {
+      return c.json({ error: "File path required" }, 400);
+    }
+
+    const content = readProjectFileBinary(projectId, filePath);
+    if (content === null) {
+      return c.json({ error: "File not found" }, 404);
+    }
+
+    const fileName = filePath.split("/").pop() || filePath;
+    return new Response(new Uint8Array(content), {
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": `attachment; filename="${fileName}"`,
+      },
+    });
+  }
+);
+
 // ── Edit History endpoints ──────────────────────────
 
 // List edit history (grouped by group_id)

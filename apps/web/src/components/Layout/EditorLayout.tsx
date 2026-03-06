@@ -208,6 +208,11 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
     [createFile]
   );
 
+  const handleDownloadFile = useCallback(
+    (path: string) => api.files.download(projectId, path),
+    [projectId]
+  );
+
   const handleExportPdf = useCallback(async () => {
     if (!currentProject) return;
     setExportingPdf(true);
@@ -276,6 +281,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
                       activeFilePath={activeFilePath}
                       mainFile={currentProject.mainFile}
                       onSelectFile={openFile}
+                      onDownloadFile={handleDownloadFile}
                       {...(!readOnly && {
                         onCreateFile: handleCreateFile,
                         onDeleteFile: deleteFile,

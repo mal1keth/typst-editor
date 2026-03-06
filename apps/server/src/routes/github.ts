@@ -1,12 +1,13 @@
 import { Hono } from "hono";
 import { Octokit } from "octokit";
 import { db, schema } from "../db/index.js";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { requireAuth } from "../middleware/auth.js";
 import { requireProjectAccess } from "../middleware/permissions.js";
 import {
   writeProjectFile,
   readProjectFile,
+  deleteProjectFile,
   listProjectFiles,
   readProjectFileBinary,
   ensureProjectDir,
@@ -30,78 +31,183 @@ async function getUserToken(userId: string): Promise<string | null> {
   return user?.githubAccessToken || null;
 }
 
-// Shared helper: download all files from a GitHub repo tree into a project.
-// Returns { fileCount, fileChanges } — fileChanges can be used for edit history.
-async function pullRepoFiles(
+const TEXT_EXTS = [".typ", ".txt", ".md", ".bib", ".csv", ".json", ".yaml", ".yml", ".toml", ".xml", ".html", ".css", ".js", ".ts"];
+
+// Full import: clears all file records and downloads everything.
+async function fullImportRepoFiles(
   octokit: Octokit,
   owner: string,
   repo: string,
   commitSha: string,
-  projectId: string
+  projectId: string,
 ): Promise<{ fileCount: number; fileChanges: FileChange[] }> {
   const { data: tree } = await octokit.rest.git.getTree({
-    owner,
-    repo,
-    tree_sha: commitSha,
-    recursive: "true",
+    owner, repo, tree_sha: commitSha, recursive: "true",
   });
 
   ensureProjectDir(projectId);
 
-  // Clear existing file metadata
   await db
     .delete(schema.projectFiles)
     .where(eq(schema.projectFiles.projectId, projectId));
 
   let fileCount = 0;
   const fileChanges: FileChange[] = [];
-  const textExts = [".typ", ".txt", ".md", ".bib", ".csv", ".json", ".yaml", ".yml", ".toml", ".xml", ".html", ".css", ".js", ".ts"];
 
   for (const item of tree.tree) {
     if (item.type === "blob" && item.path && item.sha) {
-      // Read old content before overwriting (only for text files, to keep diffs small)
-      const isText = textExts.some((ext) => item.path!.toLowerCase().endsWith(ext));
+      const isText = TEXT_EXTS.some((ext) => item.path!.toLowerCase().endsWith(ext));
       const oldContent = isText ? readProjectFile(projectId, item.path) : null;
 
       const { data: blob } = await octokit.rest.git.getBlob({
-        owner,
-        repo,
-        file_sha: item.sha,
+        owner, repo, file_sha: item.sha,
       });
-
       const content = Buffer.from(blob.content, "base64");
       writeProjectFile(projectId, item.path, content);
 
-      // Track text file changes for history
       if (isText) {
         const newContent = content.toString("utf-8");
         if (oldContent !== newContent) {
           fileChanges.push({
             path: item.path,
             diffType: oldContent != null ? "modify" : "create",
-            oldContent,
-            newContent,
+            oldContent, newContent,
           });
         }
       }
 
       await db.insert(schema.projectFiles).values({
-        id: nanoid(),
-        projectId,
-        path: item.path,
-        isDirectory: false,
-        sizeBytes: content.length,
+        id: nanoid(), projectId, path: item.path,
+        isDirectory: false, sizeBytes: content.length,
       });
       fileCount++;
     } else if (item.type === "tree" && item.path) {
       await db.insert(schema.projectFiles).values({
-        id: nanoid(),
-        projectId,
-        path: item.path,
-        isDirectory: true,
-        sizeBytes: 0,
+        id: nanoid(), projectId, path: item.path,
+        isDirectory: true, sizeBytes: 0,
       });
     }
+  }
+
+  return { fileCount, fileChanges };
+}
+
+// Incremental pull: compares old and new trees, only downloads changed files.
+// Local changes to files not modified on remote are preserved (rebase-like).
+// If a file changed both locally and remotely, remote wins (overwrite).
+async function incrementalPull(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  oldCommitSha: string,
+  newCommitSha: string,
+  projectId: string,
+): Promise<{ fileCount: number; fileChanges: FileChange[] }> {
+  // Get both trees
+  const [{ data: newTree }, { data: oldTree }] = await Promise.all([
+    octokit.rest.git.getTree({ owner, repo, tree_sha: newCommitSha, recursive: "true" }),
+    octokit.rest.git.getTree({ owner, repo, tree_sha: oldCommitSha, recursive: "true" }),
+  ]);
+
+  ensureProjectDir(projectId);
+
+  // Build old tree blob index: path → sha
+  const oldBlobs = new Map<string, string>();
+  for (const item of oldTree.tree) {
+    if (item.type === "blob" && item.path && item.sha) {
+      oldBlobs.set(item.path, item.sha);
+    }
+  }
+
+  // Find files changed or added on remote
+  const changedBlobs = newTree.tree.filter((item) => {
+    if (item.type !== "blob" || !item.path || !item.sha) return false;
+    return oldBlobs.get(item.path) !== item.sha; // new or modified
+  });
+
+  // Find files deleted on remote
+  const newPaths = new Set(
+    newTree.tree.filter((i) => i.type === "blob" && i.path).map((i) => i.path!)
+  );
+  const deletedPaths = [...oldBlobs.keys()].filter((p) => !newPaths.has(p));
+
+  let fileCount = 0;
+  const fileChanges: FileChange[] = [];
+
+  // Download changed/new files
+  for (const item of changedBlobs) {
+    const isText = TEXT_EXTS.some((ext) => item.path!.toLowerCase().endsWith(ext));
+    const oldContent = isText ? readProjectFile(projectId, item.path!) : null;
+
+    const { data: blob } = await octokit.rest.git.getBlob({
+      owner, repo, file_sha: item.sha!,
+    });
+    const content = Buffer.from(blob.content, "base64");
+    writeProjectFile(projectId, item.path!, content);
+
+    if (isText) {
+      const newContent = content.toString("utf-8");
+      if (oldContent !== newContent) {
+        fileChanges.push({
+          path: item.path!,
+          diffType: oldContent != null ? "modify" : "create",
+          oldContent, newContent,
+        });
+      }
+    }
+
+    // Upsert file record
+    const existing = await db.query.projectFiles.findFirst({
+      where: and(
+        eq(schema.projectFiles.projectId, projectId),
+        eq(schema.projectFiles.path, item.path!),
+      ),
+    });
+    if (existing) {
+      await db.update(schema.projectFiles)
+        .set({ sizeBytes: content.length })
+        .where(eq(schema.projectFiles.id, existing.id));
+    } else {
+      await db.insert(schema.projectFiles).values({
+        id: nanoid(), projectId, path: item.path!,
+        isDirectory: false, sizeBytes: content.length,
+      });
+    }
+    fileCount++;
+  }
+
+  // Handle new directories
+  const newDirs = newTree.tree.filter((i) => i.type === "tree" && i.path);
+  for (const dir of newDirs) {
+    const existing = await db.query.projectFiles.findFirst({
+      where: and(
+        eq(schema.projectFiles.projectId, projectId),
+        eq(schema.projectFiles.path, dir.path!),
+      ),
+    });
+    if (!existing) {
+      await db.insert(schema.projectFiles).values({
+        id: nanoid(), projectId, path: dir.path!,
+        isDirectory: true, sizeBytes: 0,
+      });
+    }
+  }
+
+  // Delete files removed on remote
+  for (const delPath of deletedPaths) {
+    const oldContent = readProjectFile(projectId, delPath);
+    deleteProjectFile(projectId, delPath);
+    if (oldContent != null) {
+      fileChanges.push({
+        path: delPath, diffType: "delete", oldContent, newContent: null,
+      });
+    }
+    await db.delete(schema.projectFiles).where(
+      and(
+        eq(schema.projectFiles.projectId, projectId),
+        eq(schema.projectFiles.path, delPath),
+      )
+    );
   }
 
   return { fileCount, fileChanges };
@@ -221,16 +327,19 @@ github.post(
     });
     const commitSha = ref.object.sha;
 
-    const { fileCount, fileChanges } = await pullRepoFiles(octokit, owner, repo, commitSha, projectId);
+    // Incremental pull if we have a previous sync point, full pull otherwise
+    const lastSha = project.githubLastSyncSha;
+    const { fileCount, fileChanges } = lastSha
+      ? await incrementalPull(octokit, owner, repo, lastSha, commitSha, projectId)
+      : await fullImportRepoFiles(octokit, owner, repo, commitSha, projectId);
 
-    // Record edit history for the pull
     if (fileChanges.length > 0) {
       recordEdit({
         projectId,
         userId,
         source: "github_pull",
         files: fileChanges,
-        summary: `Pulled ${fileCount} files from GitHub`,
+        summary: `Pulled ${fileCount} changed files from GitHub`,
       }).catch(() => {});
     }
 
@@ -460,10 +569,11 @@ github.post(
         return c.json({ pulled: false, reason: "in-sync" });
       }
 
-      // Out of sync — pull new files
-      const { fileCount, fileChanges } = await pullRepoFiles(octokit, owner, repo, remoteSha, projectId);
+      // Incremental pull — only download changed files, preserve local edits
+      const { fileCount, fileChanges } = localSha
+        ? await incrementalPull(octokit, owner, repo, localSha, remoteSha, projectId)
+        : await fullImportRepoFiles(octokit, owner, repo, remoteSha, projectId);
 
-      // Record edit history for auto-pull
       if (fileChanges.length > 0) {
         const { userId } = c.get("user");
         recordEdit({
@@ -471,7 +581,7 @@ github.post(
           userId,
           source: "github_pull",
           files: fileChanges,
-          summary: `Auto-pulled ${fileCount} files from GitHub`,
+          summary: `Auto-pulled ${fileCount} changed files from GitHub`,
         }).catch(() => {});
       }
 
@@ -602,7 +712,7 @@ github.post("/import", async (c) => {
   });
 
   // Download all files
-  const { fileCount } = await pullRepoFiles(octokit, owner, repo, commitSha, projectId);
+  const { fileCount } = await fullImportRepoFiles(octokit, owner, repo, commitSha, projectId);
   // No history for initial import — it's the baseline
 
   // Update sync SHA

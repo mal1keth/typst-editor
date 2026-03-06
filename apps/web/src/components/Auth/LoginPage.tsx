@@ -150,14 +150,16 @@ export function LoginPage() {
           </a>
         </div>
 
-        <div className="mt-4 text-center">
-          <a
-            href="/api/auth/dev-login"
-            className="text-sm text-gray-500 transition hover:text-gray-300"
-          >
-            Dev login (no OAuth)
-          </a>
-        </div>
+        {import.meta.env.DEV && (
+          <div className="mt-4 text-center">
+            <a
+              href="/api/auth/dev-login"
+              className="text-sm text-gray-500 transition hover:text-gray-300"
+            >
+              Dev login (no OAuth)
+            </a>
+          </div>
+        )}
       </div>
     </div>
   );
