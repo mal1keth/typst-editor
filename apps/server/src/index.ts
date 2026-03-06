@@ -4,8 +4,9 @@ import app, { setupStaticServing } from "./app.js";
 import { db, schema } from "./db/index.js";
 import { sql } from "drizzle-orm";
 import { verifyToken } from "./lib/jwt.js";
-import { handleYjsConnection } from "./ws/yjs-server.js";
+import { handleYjsConnection, type WsUserInfo } from "./ws/yjs-server.js";
 import { eq, and } from "drizzle-orm";
+import { getCookie } from "hono/cookie";
 
 // Create tables if they don't exist
 const sqlite = (db as any).$client;
@@ -95,13 +96,29 @@ app.get(
   upgradeWebSocket(async (c) => {
     const projectId = c.req.param("projectId")!;
     const filePath = c.req.param("filePath")!;
-    const token = c.req.query("token");
+
+    // Read token from httpOnly cookie (query param fallback for compat)
+    const token = getCookie(c, "token") || c.req.query("token");
 
     let permission = "read";
+    let userInfo: WsUserInfo | null = null;
 
     if (token) {
       const payload = await verifyToken(token);
       if (payload) {
+        // Resolve user info for presence
+        const user = await db.query.users.findFirst({
+          where: eq(schema.users.id, payload.userId),
+          columns: { id: true, displayName: true, avatarUrl: true },
+        });
+        if (user) {
+          userInfo = {
+            userId: user.id,
+            displayName: user.displayName,
+            avatarUrl: user.avatarUrl,
+          };
+        }
+
         // Check if owner
         const project = await db.query.projects.findFirst({
           where: eq(schema.projects.id, projectId),
@@ -124,7 +141,7 @@ app.get(
 
     return {
       onOpen(_evt: any, ws: any) {
-        handleYjsConnection(ws.raw, projectId, filePath, permission);
+        handleYjsConnection(ws.raw, projectId, filePath, permission, userInfo);
       },
     };
   })

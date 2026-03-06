@@ -15,12 +15,8 @@ import {
   setupCollaboration,
   applyLocalChange,
   type CollabState,
+  type PresenceUser,
 } from "@/lib/collaboration/yjs-setup";
-
-function getCookie(name: string): string {
-  const match = document.cookie.match(new RegExp(`(^| )${name}=([^;]+)`));
-  return match ? match[2] : "";
-}
 
 interface Props {
   projectId: string;
@@ -47,7 +43,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
   const [showGitHub, setShowGitHub] = useState(false);
   const [showShare, setShowShare] = useState(false);
   const [connected, setConnected] = useState(false);
-  const [peerCount, setPeerCount] = useState(0);
+  const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
   const [exportingPdf, setExportingPdf] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const collabRef = useRef<CollabState | null>(null);
@@ -146,22 +142,22 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
       collabRef.current = null;
     }
 
-    const token = getCookie("token");
     const collab = setupCollaboration(
       projectId,
       activeFilePath,
       contentRef.current || "",
-      token,
       (content) => {
         isRemoteUpdateRef.current = true;
         contentRef.current = content;
         setActiveFileContent(content);
         isRemoteUpdateRef.current = false;
       },
-      (conn, peers) => {
+      (conn) => {
         setConnected(conn);
-        setPeerCount(peers);
-      }
+      },
+      (users) => {
+        setPresenceUsers(users);
+      },
     );
 
     collabRef.current = collab;
@@ -210,20 +206,22 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
   );
 
   const handleExportPdf = useCallback(async () => {
-    if (!contentRef.current || !currentProject) return;
+    if (!currentProject) return;
     setExportingPdf(true);
     try {
       await exportPdf(
         projectId,
         currentProject.mainFile,
         currentProject.mainFile,
+        activeFilePath,
+        contentRef.current,
       );
     } catch (e: any) {
       alert(`PDF export failed: ${e.message}`);
     } finally {
       setExportingPdf(false);
     }
-  }, [currentProject, projectId]);
+  }, [currentProject, projectId, activeFilePath]);
 
   if (loadingProject || !currentProject) {
     return (
@@ -283,23 +281,47 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
                   )}
                 </div>
                 <div className="flex items-center justify-between border-t border-gray-800 px-3 py-2 text-xs text-gray-500">
-                  <div className="flex flex-col gap-0.5">
-                    <span className="text-gray-600">Typst {TYPST_VERSION.label}</span>
-                    {readOnly ? (
-                      <span className="text-yellow-500">Read only</span>
-                    ) : (
-                      <span>
-                        <span
-                          className={`mr-1.5 inline-block h-2 w-2 rounded-full ${
-                            connected ? "bg-green-500" : "bg-gray-600"
-                          }`}
-                        />
-                        {connected
-                          ? peerCount > 1
-                            ? `${peerCount - 1} peer${peerCount - 1 !== 1 ? "s" : ""}`
-                            : "Connected"
-                          : "Offline"}
-                      </span>
+                  <div className="flex items-center gap-2">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-gray-600">Typst {TYPST_VERSION.label}</span>
+                      {readOnly ? (
+                        <span className="text-yellow-500">Read only</span>
+                      ) : (
+                        <span>
+                          <span
+                            className={`mr-1.5 inline-block h-2 w-2 rounded-full ${
+                              connected ? "bg-green-500" : "bg-gray-600"
+                            }`}
+                          />
+                          {connected ? "Connected" : "Offline"}
+                        </span>
+                      )}
+                    </div>
+                    {/* Presence avatars */}
+                    {presenceUsers.length > 1 && (
+                      <div className="flex -space-x-1.5">
+                        {presenceUsers.map((u) => (
+                          <div
+                            key={u.userId}
+                            className="group relative"
+                          >
+                            {u.avatarUrl ? (
+                              <img
+                                src={u.avatarUrl}
+                                alt={u.displayName}
+                                className="h-5 w-5 rounded-full border border-gray-700 object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-5 w-5 items-center justify-center rounded-full border border-gray-700 bg-gray-700 text-[10px] font-medium text-gray-300">
+                                {u.displayName.charAt(0).toUpperCase()}
+                              </div>
+                            )}
+                            <div className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-1 text-[10px] text-gray-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+                              {u.displayName}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
                   <button
