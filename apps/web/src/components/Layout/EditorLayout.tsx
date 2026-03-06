@@ -135,9 +135,27 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
     return () => { cancelled = true; };
   }, [projectId, currentProject?.githubRepoFullName, shareToken, loadProject]);
 
+  // Flush pending save immediately (called before file switch / history toggle)
+  const flushSave = useCallback(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      // Save whatever is in contentRef right now
+      const path = useProjectStore.getState().activeFilePath;
+      const content = contentRef.current;
+      if (path && content !== null && !readOnly) {
+        setActiveFileContent(content);
+        saveFile(path, content);
+      }
+    }
+  }, [saveFile, setActiveFileContent, readOnly]);
+
   // Set up collaboration when file changes (skip for anonymous share access)
   useEffect(() => {
     if (!activeFilePath || !currentProject || shareToken) return;
+
+    // Flush any pending save from the previous file
+    flushSave();
 
     if (collabRef.current) {
       collabRef.current.destroy();
@@ -199,10 +217,18 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
     [activeFilePath, saveFile, setActiveFileContent, triggerCompile, compileMode, readOnly]
   );
 
+  const handleOpenFile = useCallback((path: string) => {
+    flushSave();
+    openFile(path);
+  }, [flushSave, openFile]);
+
   const handleShare = useCallback(() => setShowShare(true), []);
   const handleToggleGitHub = useCallback(() => setShowGitHub(prev => !prev), []);
   const handleToggleCompilerOutput = useCallback(() => setShowCompilerOutput(prev => !prev), []);
-  const handleToggleHistory = useCallback(() => setShowHistory(prev => !prev), []);
+  const handleToggleHistory = useCallback(() => {
+    flushSave();
+    setShowHistory(prev => !prev);
+  }, [flushSave]);
   const handleCreateFile = useCallback(
     (path: string, isDir?: boolean) => createFile(path, isDir ? undefined : "", isDir),
     [createFile]
@@ -280,7 +306,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
                       files={currentProject.files}
                       activeFilePath={activeFilePath}
                       mainFile={currentProject.mainFile}
-                      onSelectFile={openFile}
+                      onSelectFile={handleOpenFile}
                       onDownloadFile={handleDownloadFile}
                       {...(!readOnly && {
                         onCreateFile: handleCreateFile,

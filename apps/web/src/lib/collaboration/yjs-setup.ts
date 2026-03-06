@@ -98,10 +98,9 @@ export function setupCollaboration(
     };
   }
 
-  // Initialize with content if ytext is empty
-  if (ytext.length === 0 && initialContent) {
-    ytext.insert(0, initialContent);
-  }
+  // Don't initialize ytext here — the server's sync message will provide
+  // the authoritative content. If we also insert here, Yjs would merge
+  // the two independent insertions and double the content.
 
   connect();
 
