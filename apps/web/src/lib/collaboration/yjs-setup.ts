@@ -1,6 +1,12 @@
 import * as Y from "yjs";
 import type { ChangeSet } from "@codemirror/state";
 
+export interface PresenceUser {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
 export interface CollabState {
   doc: Y.Doc;
   ytext: Y.Text;
@@ -14,9 +20,9 @@ export function setupCollaboration(
   projectId: string,
   filePath: string,
   initialContent: string,
-  token: string,
   onRemoteUpdate: (content: string) => void,
-  onConnectionChange: (connected: boolean, peerCount: number) => void
+  onConnectionChange: (connected: boolean, peerCount: number) => void,
+  onPresenceChange?: (users: PresenceUser[]) => void,
 ): CollabState {
   const doc = new Y.Doc();
   const ytext = doc.getText("content");
@@ -36,8 +42,10 @@ export function setupCollaboration(
     },
   };
 
+  // No token needed in URL — the httpOnly auth cookie is automatically
+  // sent with the WebSocket upgrade request by the browser.
   const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = `${wsProtocol}//${window.location.host}/ws/yjs/${projectId}/${encodeURIComponent(filePath)}?token=${token}`;
+  const wsUrl = `${wsProtocol}//${window.location.host}/ws/yjs/${projectId}/${encodeURIComponent(filePath)}`;
 
   function connect() {
     const ws = new WebSocket(wsUrl);
@@ -60,9 +68,12 @@ export function setupCollaboration(
           const update = new Uint8Array(msg.data);
           Y.applyUpdate(doc, update);
           onRemoteUpdate(ytext.toString());
-        } else if (msg.type === "peers") {
-          state.peerCount = msg.count;
-          onConnectionChange(state.connected, msg.count);
+        } else if (msg.type === "presence") {
+          // Project-level presence: array of connected users
+          const users: PresenceUser[] = msg.users ?? [];
+          state.peerCount = users.length;
+          onConnectionChange(state.connected, users.length);
+          onPresenceChange?.(users);
         }
       } catch {
         // Ignore malformed messages
@@ -73,6 +84,7 @@ export function setupCollaboration(
       state.connected = false;
       state.ws = null;
       onConnectionChange(false, 0);
+      onPresenceChange?.([]);
 
       // Reconnect after 2s
       setTimeout(() => {

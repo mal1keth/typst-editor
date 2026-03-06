@@ -1,6 +1,14 @@
 import * as Y from "yjs";
 import { readProjectFile, writeProjectFile } from "../lib/storage.js";
 
+// ── User info passed from the WS upgrade handler ──────────────────────
+export interface WsUserInfo {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
+// ── Per-document state (file-level collaboration) ─────────────────────
 interface DocState {
   doc: Y.Doc;
   conns: Set<WebSocket>;
@@ -88,12 +96,67 @@ function scheduleGC(state: DocState) {
   }, 60000); // 60s after last disconnect
 }
 
+// ── Project-level presence tracking ───────────────────────────────────
+
+interface ProjectPresence {
+  /** All WS connections in this project, mapped to their user info */
+  conns: Map<WebSocket, WsUserInfo | null>;
+}
+
+const projectPresence = new Map<string, ProjectPresence>();
+
+function getOrCreatePresence(projectId: string): ProjectPresence {
+  let p = projectPresence.get(projectId);
+  if (!p) {
+    p = { conns: new Map() };
+    projectPresence.set(projectId, p);
+  }
+  return p;
+}
+
+/** Build deduplicated user list for broadcast (unique by userId) */
+function getPresenceUsers(presence: ProjectPresence): Array<{
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+}> {
+  const seen = new Map<string, { userId: string; displayName: string; avatarUrl: string | null }>();
+  for (const info of presence.conns.values()) {
+    if (info && !seen.has(info.userId)) {
+      seen.set(info.userId, {
+        userId: info.userId,
+        displayName: info.displayName,
+        avatarUrl: info.avatarUrl,
+      });
+    }
+  }
+  return Array.from(seen.values());
+}
+
+function broadcastPresence(projectId: string) {
+  const presence = projectPresence.get(projectId);
+  if (!presence) return;
+
+  const users = getPresenceUsers(presence);
+  const data = JSON.stringify({ type: "presence", users });
+
+  for (const conn of presence.conns.keys()) {
+    if (conn.readyState === 1) {
+      conn.send(data);
+    }
+  }
+}
+
+// ── Main connection handler ───────────────────────────────────────────
+
 export function handleYjsConnection(
   ws: WebSocket,
   projectId: string,
   filePath: string,
-  permission: string
+  permission: string,
+  userInfo: WsUserInfo | null,
 ) {
+  // -- File-level doc state --
   const state = getOrCreateDoc(projectId, filePath);
   state.conns.add(ws);
 
@@ -108,12 +171,10 @@ export function handleYjsConnection(
     })
   );
 
-  // Send awareness of existing peers
-  const peerCount = state.conns.size;
-  broadcastToAll(state, {
-    type: "peers",
-    count: peerCount,
-  });
+  // -- Project-level presence --
+  const presence = getOrCreatePresence(projectId);
+  presence.conns.set(ws, userInfo);
+  broadcastPresence(projectId);
 
   ws.addEventListener("message", (event) => {
     try {
@@ -126,7 +187,7 @@ export function handleYjsConnection(
         const update = new Uint8Array(msg.data);
         Y.applyUpdate(doc, update);
 
-        // Broadcast to other clients
+        // Broadcast to other clients on the same file
         for (const conn of state.conns) {
           if (conn !== ws && conn.readyState === 1) {
             conn.send(
@@ -138,7 +199,7 @@ export function handleYjsConnection(
           }
         }
       } else if (msg.type === "awareness") {
-        // Broadcast awareness to all other clients
+        // Broadcast awareness to all other clients on the same file
         for (const conn of state.conns) {
           if (conn !== ws && conn.readyState === 1) {
             conn.send(JSON.stringify(msg));
@@ -151,26 +212,20 @@ export function handleYjsConnection(
   });
 
   ws.addEventListener("close", () => {
+    // -- File-level cleanup --
     state.conns.delete(ws);
 
-    // Notify remaining peers
-    broadcastToAll(state, {
-      type: "peers",
-      count: state.conns.size,
-    });
-
-    // Schedule GC if no more connections
+    // Schedule GC if no more connections to this file
     if (state.conns.size === 0) {
       scheduleGC(state);
     }
-  });
-}
 
-function broadcastToAll(state: DocState, msg: any) {
-  const data = JSON.stringify(msg);
-  for (const conn of state.conns) {
-    if (conn.readyState === 1) {
-      conn.send(data);
+    // -- Project-level presence cleanup --
+    presence.conns.delete(ws);
+    if (presence.conns.size === 0) {
+      projectPresence.delete(projectId);
+    } else {
+      broadcastPresence(projectId);
     }
-  }
+  });
 }

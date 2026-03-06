@@ -302,21 +302,24 @@ export function useTypstCompiler(
 }
 
 // ---------------------------------------------------------------------------
-// PDF export — uses the same worker for compilation
+// PDF export — reuses the worker's already-loaded VFS & compiler state.
+// No remount or reset needed — just recompile with format: 1 (PDF).
 // ---------------------------------------------------------------------------
 export async function exportPdf(
   projectId: string,
   mainFile: string,
   filename: string,
+  activeFilePath?: string | null,
+  activeFileContent?: string | null,
 ) {
   const result = await sendToWorker({
     type: "compile",
     version: TYPST_VERSION.pkg,
     projectId,
-    needsMount: true,
-    activeFilePath: null,
-    activeFileContent: null,
-    needsReset: true,
+    needsMount: false,
+    activeFilePath: activeFilePath ?? null,
+    activeFileContent: activeFileContent ?? null,
+    needsReset: false,
     mainFilePath: mainFile,
     format: 1, // PDF
   });
