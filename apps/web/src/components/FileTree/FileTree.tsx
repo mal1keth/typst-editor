@@ -5,11 +5,13 @@ interface Props {
   files: FileEntry[];
   activeFilePath: string | null;
   mainFile: string;
+  modifiedFiles?: Set<string>;
   onSelectFile: (path: string) => void;
   onCreateFile?: (path: string, isDirectory?: boolean) => void;
   onDeleteFile?: (path: string) => void;
   onSetMainFile?: (path: string) => void;
   onDownloadFile?: (path: string) => void;
+  onResetFile?: (path: string) => void;
 }
 
 interface TreeNode {
@@ -34,9 +36,16 @@ function FolderIcon({ open }: { open?: boolean }) {
   );
 }
 
-function FileIcon({ isMain }: { isMain?: boolean }) {
+function FileIcon({ isMain, onClick }: { isMain?: boolean; onClick?: (e: React.MouseEvent) => void }) {
   return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="shrink-0">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      className={`shrink-0 ${onClick ? "cursor-pointer" : ""}`}
+      onClick={onClick}
+    >
       <path d="M3 1h7l3 3v11H3V1z" fill={isMain ? "#5a4a1e" : "#374151"} />
       <path d="M4 2h5.5L12 4.5V14H4V2z" fill={isMain ? "#d4a843" : "#6b7280"} />
       <path d="M10 1v3h3" fill="none" stroke={isMain ? "#b08c3e" : "#4b5563"} strokeWidth="0.5" />
@@ -149,8 +158,8 @@ function FileTreeNode({
   depth,
   activeFilePath,
   mainFile,
+  modifiedFiles,
   onSelectFile,
-  onDeleteFile,
   onSetMainFile,
   onContextMenu,
 }: {
@@ -158,14 +167,15 @@ function FileTreeNode({
   depth: number;
   activeFilePath: string | null;
   mainFile: string;
+  modifiedFiles?: Set<string>;
   onSelectFile: (path: string) => void;
-  onDeleteFile?: (path: string) => void;
   onSetMainFile?: (path: string) => void;
   onContextMenu?: (e: React.MouseEvent, node: TreeNode) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const isActive = node.path === activeFilePath;
   const isMain = node.path === mainFile;
+  const isModified = modifiedFiles?.has(node.path);
 
   if (node.isDirectory) {
     return (
@@ -187,8 +197,8 @@ function FileTreeNode({
               depth={depth + 1}
               activeFilePath={activeFilePath}
               mainFile={mainFile}
+              modifiedFiles={modifiedFiles}
               onSelectFile={onSelectFile}
-              onDeleteFile={onDeleteFile}
               onSetMainFile={onSetMainFile}
               onContextMenu={onContextMenu}
             />
@@ -197,7 +207,14 @@ function FileTreeNode({
     );
   }
 
-  const showSetMain = onSetMainFile && !isMain && node.name.endsWith(".typ");
+  const canSetMain = onSetMainFile && !isMain && node.name.endsWith(".typ");
+
+  const handleIconClick = canSetMain
+    ? (e: React.MouseEvent) => {
+        e.stopPropagation();
+        onSetMainFile!(node.path);
+      }
+    : undefined;
 
   return (
     <div
@@ -213,21 +230,18 @@ function FileTreeNode({
         onClick={() => onSelectFile(node.path)}
         className="flex flex-1 items-center gap-1.5 truncate text-left"
       >
-        <FileIcon isMain={isMain} />
+        <span title={canSetMain ? "Click to set as main file" : isMain ? "Main file" : undefined}>
+          <FileIcon isMain={isMain} onClick={handleIconClick} />
+        </span>
         <span className="truncate">{node.name}</span>
       </button>
-      {showSetMain && (
-        <button
-          onClick={(e) => { e.stopPropagation(); onSetMainFile!(node.path); }}
-          className={`ml-1 shrink-0 rounded px-1 py-0.5 font-mono text-[10px] leading-none ${
-            isActive
-              ? "text-gray-400 hover:text-yellow-400"
-              : "hidden text-gray-600 hover:text-yellow-400 group-hover:block"
-          }`}
-          title="Set as main compile file"
+      {isModified && (
+        <span
+          className="ml-1 shrink-0 font-mono text-[10px] leading-none text-yellow-400"
+          title="Modified (unsaved changes)"
         >
           M
-        </button>
+        </span>
       )}
     </div>
   );
@@ -237,11 +251,13 @@ export const FileTree = memo(function FileTree({
   files,
   activeFilePath,
   mainFile,
+  modifiedFiles,
   onSelectFile,
   onCreateFile,
   onDeleteFile,
   onSetMainFile,
   onDownloadFile,
+  onResetFile,
 }: Props) {
   const [newFileName, setNewFileName] = useState("");
   const [showInput, setShowInput] = useState<false | "file" | "folder">(false);
@@ -261,7 +277,7 @@ export const FileTree = memo(function FileTree({
     setShowInput(false);
   };
 
-  const canEdit = !!(onCreateFile || onDeleteFile || onSetMainFile || onDownloadFile);
+  const canEdit = !!(onCreateFile || onDeleteFile || onSetMainFile || onDownloadFile || onResetFile);
 
   const handleContextMenu = canEdit
     ? (e: React.MouseEvent, node: TreeNode) => {
@@ -285,6 +301,18 @@ export const FileTree = memo(function FileTree({
               {
                 label: "Set as main file",
                 onClick: () => onSetMainFile(contextMenu.node.path),
+              },
+            ]
+          : []),
+        ...(onResetFile && !contextMenu.node.isDirectory && modifiedFiles?.has(contextMenu.node.path)
+          ? [
+              {
+                label: "Reset changes",
+                onClick: () => {
+                  if (confirm(`Reset "${contextMenu.node.name}" to last saved version?`))
+                    onResetFile(contextMenu.node.path);
+                },
+                danger: true,
               },
             ]
           : []),
@@ -356,8 +384,8 @@ export const FileTree = memo(function FileTree({
             depth={0}
             activeFilePath={activeFilePath}
             mainFile={mainFile}
+            modifiedFiles={modifiedFiles}
             onSelectFile={onSelectFile}
-            onDeleteFile={onDeleteFile}
             onSetMainFile={onSetMainFile}
             onContextMenu={handleContextMenu}
           />
