@@ -11,10 +11,12 @@ export function GitHubPanel({ projectId, onClose, onPullComplete }: Props) {
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [repos, setRepos] = useState<GithubRepo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
+  const [pulling, setPulling] = useState(false);
+  const [pushing, setPushing] = useState(false);
   const [commitMsg, setCommitMsg] = useState("");
   const [selectedRepo, setSelectedRepo] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const syncing = pulling || pushing;
 
   useEffect(() => {
     loadStatus();
@@ -38,7 +40,7 @@ export function GitHubPanel({ projectId, onClose, onPullComplete }: Props) {
 
   async function handleLink() {
     if (!selectedRepo) return;
-    setSyncing(true);
+    setPulling(true);
     setError(null);
     try {
       await api.github.link(projectId, selectedRepo);
@@ -48,12 +50,12 @@ export function GitHubPanel({ projectId, onClose, onPullComplete }: Props) {
     } catch (e: any) {
       setError(e.message);
     } finally {
-      setSyncing(false);
+      setPulling(false);
     }
   }
 
   async function handlePull() {
-    setSyncing(true);
+    setPulling(true);
     setError(null);
     try {
       await api.github.pull(projectId);
@@ -62,13 +64,13 @@ export function GitHubPanel({ projectId, onClose, onPullComplete }: Props) {
     } catch (e: any) {
       setError(e.message);
     } finally {
-      setSyncing(false);
+      setPulling(false);
     }
   }
 
   async function handlePush() {
     if (!commitMsg.trim()) return;
-    setSyncing(true);
+    setPushing(true);
     setError(null);
     try {
       await api.github.push(projectId, commitMsg.trim());
@@ -77,7 +79,7 @@ export function GitHubPanel({ projectId, onClose, onPullComplete }: Props) {
     } catch (e: any) {
       setError(e.message);
     } finally {
-      setSyncing(false);
+      setPushing(false);
     }
   }
 
@@ -179,7 +181,7 @@ export function GitHubPanel({ projectId, onClose, onPullComplete }: Props) {
                     disabled={syncing}
                     className="w-full rounded bg-gray-800 py-1.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-50"
                   >
-                    {syncing ? "Pulling..." : "Pull"}
+                    {pulling ? "Pulling..." : "Pull"}
                   </button>
 
                   <div className="flex gap-2">
@@ -196,7 +198,7 @@ export function GitHubPanel({ projectId, onClose, onPullComplete }: Props) {
                       disabled={syncing || !commitMsg.trim()}
                       className="rounded bg-green-700 px-3 py-1.5 text-sm text-white hover:bg-green-600 disabled:opacity-50"
                     >
-                      Push
+                      {pushing ? "Pushing..." : "Push"}
                     </button>
                   </div>
                 </div>
