@@ -114,6 +114,12 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
 
   const [autoPullStatus, setAutoPullStatus] = useState<string | null>(null);
 
+  // Clear modification tracking — called after pull or project reload
+  const resetModifiedState = useCallback(() => {
+    setModifiedFiles(new Set());
+    savedContentRef.current.clear();
+  }, []);
+
   useEffect(() => {
     loadProject(projectId, shareToken);
   }, [projectId, shareToken, loadProject]);
@@ -131,6 +137,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
 
         if (result.pulled) {
           setAutoPullStatus(`Pulled ${result.fileCount} files from GitHub`);
+          resetModifiedState();
           // Reload the project to pick up new files
           await loadProject(projectId);
           // Clear the status after a few seconds
@@ -144,7 +151,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
     })();
 
     return () => { cancelled = true; };
-  }, [projectId, currentProject?.githubRepoFullName, shareToken, loadProject]);
+  }, [projectId, currentProject?.githubRepoFullName, shareToken, loadProject, resetModifiedState]);
 
   // Flush pending save immediately (called before file switch / history toggle)
   const flushSave = useCallback(() => {
@@ -355,7 +362,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
                     <GitHubPanel
                       projectId={projectId}
                       onClose={() => setShowGitHub(false)}
-                      onPullComplete={() => loadProject(projectId)}
+                      onPullComplete={() => { resetModifiedState(); loadProject(projectId); }}
                     />
                   ) : (
                     <FileTree
