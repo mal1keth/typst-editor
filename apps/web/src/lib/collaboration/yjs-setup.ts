@@ -5,6 +5,7 @@ export interface PresenceUser {
   userId: string;
   displayName: string;
   avatarUrl: string | null;
+  anonymous?: boolean;
 }
 
 export interface CollabState {
