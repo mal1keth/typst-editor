@@ -9,6 +9,7 @@ interface Props {
   onCreateFile?: (path: string, isDirectory?: boolean) => void;
   onDeleteFile?: (path: string) => void;
   onSetMainFile?: (path: string) => void;
+  onDownloadFile?: (path: string) => void;
 }
 
 interface TreeNode {
@@ -240,6 +241,7 @@ export const FileTree = memo(function FileTree({
   onCreateFile,
   onDeleteFile,
   onSetMainFile,
+  onDownloadFile,
 }: Props) {
   const [newFileName, setNewFileName] = useState("");
   const [showInput, setShowInput] = useState<false | "file" | "folder">(false);
@@ -259,7 +261,7 @@ export const FileTree = memo(function FileTree({
     setShowInput(false);
   };
 
-  const canEdit = !!(onCreateFile || onDeleteFile || onSetMainFile);
+  const canEdit = !!(onCreateFile || onDeleteFile || onSetMainFile || onDownloadFile);
 
   const handleContextMenu = canEdit
     ? (e: React.MouseEvent, node: TreeNode) => {
@@ -270,6 +272,14 @@ export const FileTree = memo(function FileTree({
 
   const contextMenuItems = contextMenu
     ? [
+        ...(onDownloadFile && !contextMenu.node.isDirectory
+          ? [
+              {
+                label: "Download",
+                onClick: () => onDownloadFile(contextMenu.node.path),
+              },
+            ]
+          : []),
         ...(onSetMainFile && !contextMenu.node.isDirectory && contextMenu.node.name.endsWith(".typ") && contextMenu.node.path !== mainFile
           ? [
               {

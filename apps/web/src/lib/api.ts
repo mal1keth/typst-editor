@@ -90,6 +90,13 @@ export const api = {
       request<{ ok: boolean }>(`/projects/${projectId}/files/${encodeFilePath(path)}`, {
         method: "DELETE",
       }),
+    download: (projectId: string, path: string) => {
+      const url = `${BASE}/projects/${projectId}/download/${encodeFilePath(path)}`;
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = path.split("/").pop() || path;
+      a.click();
+    },
   },
   github: {
     repos: () => request<GithubRepo[]>("/github/repos"),
