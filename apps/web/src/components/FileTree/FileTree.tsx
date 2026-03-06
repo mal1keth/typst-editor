@@ -10,6 +10,7 @@ interface Props {
   onCreateFile?: (path: string, isDirectory?: boolean) => void;
   onDeleteFile?: (path: string) => void;
   onSetMainFile?: (path: string) => void;
+  onDoubleClickFile?: (path: string) => void;
   onDownloadFile?: (path: string) => void;
   onResetFile?: (path: string) => void;
 }
@@ -160,6 +161,7 @@ function FileTreeNode({
   mainFile,
   modifiedFiles,
   onSelectFile,
+  onDoubleClickFile,
   onSetMainFile,
   onContextMenu,
 }: {
@@ -169,6 +171,7 @@ function FileTreeNode({
   mainFile: string;
   modifiedFiles?: Set<string>;
   onSelectFile: (path: string) => void;
+  onDoubleClickFile?: (path: string) => void;
   onSetMainFile?: (path: string) => void;
   onContextMenu?: (e: React.MouseEvent, node: TreeNode) => void;
 }) {
@@ -199,6 +202,7 @@ function FileTreeNode({
               mainFile={mainFile}
               modifiedFiles={modifiedFiles}
               onSelectFile={onSelectFile}
+              onDoubleClickFile={onDoubleClickFile}
               onSetMainFile={onSetMainFile}
               onContextMenu={onContextMenu}
             />
@@ -225,6 +229,7 @@ function FileTreeNode({
       }`}
       style={{ paddingLeft: `${depth * 12 + 20}px` }}
       onContextMenu={onContextMenu ? (e) => onContextMenu(e, node) : undefined}
+      onDoubleClick={onDoubleClickFile ? () => onDoubleClickFile(node.path) : undefined}
     >
       <button
         onClick={() => onSelectFile(node.path)}
@@ -237,7 +242,7 @@ function FileTreeNode({
       </button>
       {isModified && (
         <span
-          className="ml-1 shrink-0 font-mono text-[10px] leading-none text-yellow-400"
+          className="ml-1 shrink-0 font-mono text-[10px] leading-none text-blue-400/70"
           title="Modified (unsaved changes)"
         >
           M
@@ -253,6 +258,7 @@ export const FileTree = memo(function FileTree({
   mainFile,
   modifiedFiles,
   onSelectFile,
+  onDoubleClickFile,
   onCreateFile,
   onDeleteFile,
   onSetMainFile,
@@ -277,7 +283,7 @@ export const FileTree = memo(function FileTree({
     setShowInput(false);
   };
 
-  const canEdit = !!(onCreateFile || onDeleteFile || onSetMainFile || onDownloadFile || onResetFile);
+  const canEdit = !!(onCreateFile || onDeleteFile || onSetMainFile || onDownloadFile || onResetFile || onDoubleClickFile);
 
   const handleContextMenu = canEdit
     ? (e: React.MouseEvent, node: TreeNode) => {
@@ -288,6 +294,14 @@ export const FileTree = memo(function FileTree({
 
   const contextMenuItems = contextMenu
     ? [
+        ...(onDoubleClickFile && !contextMenu.node.isDirectory
+          ? [
+              {
+                label: "Show file history",
+                onClick: () => onDoubleClickFile(contextMenu.node.path),
+              },
+            ]
+          : []),
         ...(onDownloadFile && !contextMenu.node.isDirectory
           ? [
               {
@@ -386,6 +400,7 @@ export const FileTree = memo(function FileTree({
             mainFile={mainFile}
             modifiedFiles={modifiedFiles}
             onSelectFile={onSelectFile}
+            onDoubleClickFile={onDoubleClickFile}
             onSetMainFile={onSetMainFile}
             onContextMenu={handleContextMenu}
           />

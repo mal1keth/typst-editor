@@ -535,7 +535,7 @@ projects.get(
         eh.group_id,
         eh.user_id,
         eh.source,
-        eh.created_at,
+        MAX(eh.created_at) as created_at,
         ehf.diff_type,
         ehf.unified_diff,
         u.display_name,
@@ -544,7 +544,8 @@ projects.get(
       INNER JOIN edit_history eh ON ehf.history_id = eh.id
       LEFT JOIN users u ON eh.user_id = u.id
       WHERE eh.project_id = ${projectId} AND ehf.file_path = ${filePath}
-      ORDER BY eh.created_at DESC
+      GROUP BY eh.group_id
+      ORDER BY created_at DESC
       LIMIT ${limit}
     `);
 

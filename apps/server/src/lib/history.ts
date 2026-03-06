@@ -43,7 +43,9 @@ export async function recordEdit(opts: {
     });
 
     if (recent) {
-      const elapsed = Date.now() - new Date(recent.createdAt!).getTime();
+      // SQLite datetime('now') stores UTC without Z suffix — append it for correct parsing
+      const createdAt = recent.createdAt!;
+      const elapsed = Date.now() - new Date(createdAt.endsWith("Z") ? createdAt : createdAt + "Z").getTime();
       if (elapsed < GROUP_WINDOW_MS) {
         groupId = recent.groupId;
       } else {
