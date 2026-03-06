@@ -184,19 +184,19 @@ export function GitHubPanel({ projectId, onClose, onPullComplete }: Props) {
                     {pulling ? "Pulling..." : "Pull"}
                   </button>
 
-                  <div className="flex gap-2">
+                  <div className="space-y-2">
                     <input
                       type="text"
                       value={commitMsg}
                       onChange={(e) => setCommitMsg(e.target.value)}
                       placeholder="Commit message..."
-                      className="flex-1 rounded border border-gray-700 bg-gray-800 px-2 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                      className="w-full rounded border border-gray-700 bg-gray-800 px-2 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
                       onKeyDown={(e) => e.key === "Enter" && handlePush()}
                     />
                     <button
                       onClick={handlePush}
                       disabled={syncing || !commitMsg.trim()}
-                      className="rounded bg-green-700 px-3 py-1.5 text-sm text-white hover:bg-green-600 disabled:opacity-50"
+                      className="w-full rounded bg-green-700 py-1.5 text-sm font-medium text-white hover:bg-green-600 disabled:opacity-50"
                     >
                       {pushing ? "Pushing..." : "Push"}
                     </button>

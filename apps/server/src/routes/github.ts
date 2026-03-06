@@ -458,15 +458,75 @@ github.post(
         );
       }
 
-      // Create blobs and tree entries (parallel, concurrency-limited)
-      const files = listProjectFiles(projectId).filter((f) => !f.isDirectory);
-      const treeEntries = (await concurrentMap(files, async (file) => {
+      // ---- Diff local files against the remote tree ----
+      // Fetch the full tree of the parent commit so we can skip unchanged files.
+      const { data: parentCommit } = await octokit.rest.git.getCommit({
+        owner, repo, commit_sha: parentSha,
+      });
+      const { data: remoteTree } = await octokit.rest.git.getTree({
+        owner, repo, tree_sha: parentCommit.tree.sha, recursive: "1",
+      });
+
+      // Build a map of remote path → blob sha for quick lookup
+      const remoteBlobs = new Map<string, string>();
+      for (const item of remoteTree.tree) {
+        if (item.type === "blob" && item.path && item.sha) {
+          remoteBlobs.set(item.path, item.sha);
+        }
+      }
+
+      // Compute local git blob SHA without uploading (sha1 of "blob <size>\0<content>")
+      const { createHash } = await import("crypto");
+      function gitBlobSha(buf: Buffer): string {
+        const header = `blob ${buf.length}\0`;
+        return createHash("sha1").update(header).update(buf).digest("hex");
+      }
+
+      // GitHub API rejects blobs over ~100 MB; skip files above 50 MB to be safe.
+      const PUSH_MAX_FILE_BYTES = 50 * 1024 * 1024;
+      const localFiles = listProjectFiles(projectId).filter((f) => !f.isDirectory);
+      const skipped: string[] = [];
+
+      // Determine which files are new or modified
+      const changedFiles: typeof localFiles = [];
+      const localPaths = new Set<string>();
+      for (const file of localFiles) {
+        localPaths.add(file.path);
+        if (file.sizeBytes > PUSH_MAX_FILE_BYTES) {
+          skipped.push(file.path);
+          continue;
+        }
+        const content = readProjectFileBinary(projectId, file.path);
+        if (!content) continue;
+        const localSha = gitBlobSha(content);
+        if (remoteBlobs.get(file.path) === localSha) continue; // unchanged
+        changedFiles.push(file);
+      }
+
+      // Detect deleted files (present in remote but not locally)
+      const deletedPaths: string[] = [];
+      for (const remotePath of remoteBlobs.keys()) {
+        if (!localPaths.has(remotePath)) deletedPaths.push(remotePath);
+      }
+
+      if (changedFiles.length === 0 && deletedPaths.length === 0) {
+        return c.json({ error: "Nothing to push — all files match remote." }, 400);
+      }
+
+      // Upload only changed/new files as blobs
+      const treeEntries: Array<{
+        path: string;
+        mode: "100644";
+        type: "blob";
+        sha: string | null;
+      }> = [];
+
+      const blobEntries = await concurrentMap(changedFiles, async (file) => {
         const content = readProjectFileBinary(projectId, file.path);
         if (!content) return null;
 
         const { data: blob } = await octokit.rest.git.createBlob({
-          owner,
-          repo,
+          owner, repo,
           content: content.toString("base64"),
           encoding: "base64",
         });
@@ -477,20 +537,32 @@ github.post(
           type: "blob" as const,
           sha: blob.sha,
         };
-      })).filter((e): e is NonNullable<typeof e> => e !== null);
+      });
 
-      // Create tree
+      for (const entry of blobEntries) {
+        if (entry) treeEntries.push(entry);
+      }
+
+      // Mark deleted files with sha: null to remove them from the tree
+      for (const dp of deletedPaths) {
+        treeEntries.push({
+          path: dp,
+          mode: "100644",
+          type: "blob",
+          sha: null,
+        });
+      }
+
+      // Create tree (base_tree ensures unchanged files carry over)
       const { data: tree } = await octokit.rest.git.createTree({
-        owner,
-        repo,
-        tree: treeEntries,
-        base_tree: parentSha,
+        owner, repo,
+        tree: treeEntries as any,
+        base_tree: parentCommit.tree.sha,
       });
 
       // Create commit
       const { data: commit } = await octokit.rest.git.createCommit({
-        owner,
-        repo,
+        owner, repo,
         message: body.commitMessage.trim(),
         tree: tree.sha,
         parents: [parentSha],
@@ -498,8 +570,7 @@ github.post(
 
       // Update ref
       await octokit.rest.git.updateRef({
-        owner,
-        repo,
+        owner, repo,
         ref: `heads/${branch}`,
         sha: commit.sha,
       });
@@ -513,7 +584,13 @@ github.post(
         })
         .where(eq(schema.projects.id, projectId));
 
-      return c.json({ ok: true, commitSha: commit.sha });
+      return c.json({
+        ok: true,
+        commitSha: commit.sha,
+        changedFiles: changedFiles.length,
+        deletedFiles: deletedPaths.length,
+        ...(skipped.length > 0 && { skippedFiles: skipped }),
+      });
     } catch (e: any) {
       const msg = e?.response?.data?.message || e?.message || String(e);
       return c.json({ error: `Push failed: ${msg}` }, 500);
