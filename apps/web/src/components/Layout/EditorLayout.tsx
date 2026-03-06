@@ -7,6 +7,7 @@ import { PreviewPanel } from "@/components/Preview/PreviewPanel";
 import { FileTree } from "@/components/FileTree/FileTree";
 import { GitHubPanel } from "@/components/GitHub/GitHubPanel";
 import { ShareDialog } from "@/components/Share/ShareDialog";
+import { HistoryView } from "@/components/History/HistoryView";
 import { Toolbar } from "@/components/Layout/Toolbar";
 import { useProjectStore } from "@/stores/projectStore";
 import { useTypstCompiler, exportPdf, TYPST_VERSION } from "@/hooks/useTypstCompiler";
@@ -50,6 +51,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
   const isRemoteUpdateRef = useRef(false);
 
   const [showCompilerOutput, setShowCompilerOutput] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [compileMode, setCompileMode] = useState<'live' | 'manual'>(() =>
     (localStorage.getItem('typst-compile-mode') as 'live' | 'manual') || 'manual'
@@ -200,6 +202,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
   const handleShare = useCallback(() => setShowShare(true), []);
   const handleToggleGitHub = useCallback(() => setShowGitHub(prev => !prev), []);
   const handleToggleCompilerOutput = useCallback(() => setShowCompilerOutput(prev => !prev), []);
+  const handleToggleHistory = useCallback(() => setShowHistory(prev => !prev), []);
   const handleCreateFile = useCallback(
     (path: string, isDir?: boolean) => createFile(path, isDir ? undefined : "", isDir),
     [createFile]
@@ -251,6 +254,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
         onCompilerOutput={handleToggleCompilerOutput}
         onCompileModeChange={setCompileMode}
         onCompile={triggerCompile}
+        onHistory={!readOnly ? handleToggleHistory : undefined}
       />
 
       <PanelGroup direction="horizontal" className="flex-1 overflow-hidden" autoSaveId="editor-layout">
@@ -354,8 +358,15 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
           </div>
         )}
 
-        {/* Editor + Preview */}
-        {activeFilePath ? (
+        {/* Main content area: History view OR Editor + Preview */}
+        {showHistory ? (
+          <Panel id="history-view" order={2} defaultSize={85}>
+            <HistoryView
+              projectId={projectId}
+              onClose={() => setShowHistory(false)}
+            />
+          </Panel>
+        ) : activeFilePath ? (
           <>
             <Panel id="editor" order={2} defaultSize={42} minSize={20}>
               <PanelGroup direction="vertical" autoSaveId="editor-vertical">

@@ -165,6 +165,20 @@ export const api = {
         { method: "POST" }
       ),
   },
+  history: {
+    list: (projectId: string, limit = 50, offset = 0) =>
+      request<HistoryGroup[]>(
+        `/projects/${projectId}/history?limit=${limit}&offset=${offset}`
+      ),
+    group: (projectId: string, groupId: string) =>
+      request<HistoryGroupDetail>(
+        `/projects/${projectId}/history/group/${groupId}`
+      ),
+    forFile: (projectId: string, filePath: string, limit = 20) =>
+      request<HistoryFileEntry[]>(
+        `/projects/${projectId}/history/file/${encodeFilePath(filePath)}?limit=${limit}`
+      ),
+  },
   // Anonymous access via share token (no auth required)
   shared: {
     project: (token: string) =>
@@ -250,5 +264,37 @@ export interface ShareLink {
   maxUses: number | null;
   useCount: number;
   isActive: boolean;
+  createdAt: string;
+}
+
+export interface HistoryGroup {
+  groupId: string;
+  userId: string | null;
+  displayName: string;
+  avatarUrl: string | null;
+  source: "edit" | "github_pull" | "file_create" | "file_delete";
+  summary: string | null;
+  changedFiles: Array<{ path: string; diffType: string }>;
+  createdAt: string;
+  lastEditAt: string;
+}
+
+export interface HistoryGroupDetail {
+  groupId: string;
+  entries: Array<{
+    filePath: string;
+    diffType: string;
+    unifiedDiff: string | null;
+  }>;
+}
+
+export interface HistoryFileEntry {
+  groupId: string;
+  userId: string | null;
+  displayName: string;
+  avatarUrl: string | null;
+  source: string;
+  diffType: string;
+  unifiedDiff: string | null;
   createdAt: string;
 }

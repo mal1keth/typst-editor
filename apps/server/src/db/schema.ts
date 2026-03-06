@@ -70,6 +70,44 @@ export const shareLinks = sqliteTable("share_links", {
   createdAt: text("created_at").default(sql`(datetime('now'))`),
 });
 
+export const editHistory = sqliteTable(
+  "edit_history",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    userId: text("user_id").references(() => users.id),
+    source: text("source", {
+      enum: ["edit", "github_pull", "file_create", "file_delete"],
+    })
+      .notNull()
+      .default("edit"),
+    summary: text("summary"),
+    groupId: text("group_id").notNull(),
+    createdAt: text("created_at").default(sql`(datetime('now'))`),
+  },
+  (table) => [index("edit_history_project_idx").on(table.projectId, table.createdAt)]
+);
+
+export const editHistoryFiles = sqliteTable(
+  "edit_history_files",
+  {
+    id: text("id").primaryKey(),
+    historyId: text("history_id")
+      .notNull()
+      .references(() => editHistory.id, { onDelete: "cascade" }),
+    filePath: text("file_path").notNull(),
+    diffType: text("diff_type", {
+      enum: ["create", "modify", "delete"],
+    })
+      .notNull()
+      .default("modify"),
+    unifiedDiff: text("unified_diff"),
+  },
+  (table) => [index("edit_history_files_idx").on(table.historyId)]
+);
+
 export const collaborators = sqliteTable(
   "collaborators",
   {

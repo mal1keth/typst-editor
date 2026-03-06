@@ -18,6 +18,7 @@ interface Props {
   onCompilerOutput: () => void;
   onCompileModeChange: (mode: 'live' | 'manual') => void;
   onCompile: () => void;
+  onHistory?: () => void;
 }
 
 export const Toolbar = memo(function Toolbar({
@@ -38,6 +39,7 @@ export const Toolbar = memo(function Toolbar({
   onCompilerOutput,
   onCompileModeChange,
   onCompile,
+  onHistory,
 }: Props) {
   return (
     <header className="flex h-12 items-center justify-between border-b border-gray-800 bg-gray-900 px-4">
@@ -102,6 +104,14 @@ export const Toolbar = memo(function Toolbar({
         </button>
         {!readOnly && (
           <>
+            {onHistory && (
+              <button
+                onClick={onHistory}
+                className="rounded bg-gray-800 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
+              >
+                History
+              </button>
+            )}
             <button
               onClick={onExportPdf}
               disabled={exportingPdf}

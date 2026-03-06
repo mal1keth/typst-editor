@@ -325,7 +325,15 @@ export async function exportPdf(
   });
 
   if (!result.success || !result.result) {
-    throw new Error("PDF compilation failed");
+    const diags = result.diagnostics ?? [];
+    const messages = diags
+      .filter((d: any) => d.severity === "error")
+      .map((d: any) => d.message || String(d))
+      .slice(0, 5); // Show at most 5 errors
+    const detail = messages.length > 0
+      ? messages.join("\n")
+      : "Compilation failed with errors";
+    throw new Error(detail);
   }
 
   const blob = new Blob([result.result], { type: "application/pdf" });
