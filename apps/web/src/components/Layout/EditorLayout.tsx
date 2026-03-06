@@ -145,6 +145,9 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
           resetModifiedState();
           // Reload the project to pick up new files
           await loadProject(projectId);
+          // Force editor remount so it picks up freshly pulled content
+          // (without this, the editor keeps old content and auto-save writes it back)
+          setEditorResetKey((k) => k + 1);
           // Clear the status after a few seconds
           setTimeout(() => {
             if (!cancelled) setAutoPullStatus(null);
@@ -367,7 +370,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
                     <GitHubPanel
                       projectId={projectId}
                       onClose={() => setShowGitHub(false)}
-                      onPullComplete={() => {
+                      onPullComplete={async () => {
                         // Cancel any pending debounced save to prevent stale
                         // local content from overwriting freshly pulled files
                         if (saveTimerRef.current) {
@@ -375,7 +378,10 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
                           saveTimerRef.current = null;
                         }
                         resetModifiedState();
-                        loadProject(projectId);
+                        await loadProject(projectId);
+                        // Force editor remount so it picks up freshly pulled content
+                        // (without this, the editor keeps old content and auto-save writes it back)
+                        setEditorResetKey((k) => k + 1);
                       }}
                     />
                   ) : (
