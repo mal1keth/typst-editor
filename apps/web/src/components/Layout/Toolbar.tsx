@@ -56,7 +56,7 @@ export const Toolbar = memo(function Toolbar({
           <span className="rounded bg-yellow-900/50 px-2 py-0.5 text-xs text-yellow-300">Read only</span>
         )}
         {saving && (
-          <span className="text-xs text-gray-500">Saving...</span>
+          <span className="text-xs text-gray-600" style={{ opacity: 0.5 }}>&bull;</span>
         )}
         {autoPullStatus && (
           <span className="text-xs text-green-400">{autoPullStatus}</span>
