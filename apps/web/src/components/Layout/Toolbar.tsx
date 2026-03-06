@@ -2,7 +2,6 @@ import { memo } from "react";
 
 interface Props {
   projectName: string;
-  saving: boolean;
   githubLinked: boolean;
   errorCount: number;
   showingCompilerOutput: boolean;
@@ -23,7 +22,6 @@ interface Props {
 
 export const Toolbar = memo(function Toolbar({
   projectName,
-  saving,
   githubLinked,
   errorCount,
   showingCompilerOutput,
@@ -54,9 +52,6 @@ export const Toolbar = memo(function Toolbar({
         <h1 className="font-semibold text-gray-100">{projectName}</h1>
         {readOnly && (
           <span className="rounded bg-yellow-900/50 px-2 py-0.5 text-xs text-yellow-300">Read only</span>
-        )}
-        {saving && (
-          <span className="text-xs text-gray-600" style={{ opacity: 0.5 }}>&bull;</span>
         )}
         {autoPullStatus && (
           <span className="text-xs text-green-400">{autoPullStatus}</span>

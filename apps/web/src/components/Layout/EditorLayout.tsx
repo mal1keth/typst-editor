@@ -30,7 +30,6 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
     currentProject,
     activeFilePath,
     loadingProject,
-    savingFile,
     readOnly,
     loadProject,
     openFile,
@@ -52,6 +51,8 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
 
   const [showCompilerOutput, setShowCompilerOutput] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [historyFileFilter, setHistoryFileFilter] = useState<string | null>(null);
+  const [historySelectedFile, setHistorySelectedFile] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [compileMode, setCompileMode] = useState<'live' | 'manual'>(() =>
     (localStorage.getItem('typst-compile-mode') as 'live' | 'manual') || 'manual'
@@ -156,13 +157,6 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
       if (path && content !== null && !readOnly) {
         setActiveFileContent(content);
         saveFile(path, content);
-        savedContentRef.current.set(path, content);
-        setModifiedFiles((prev) => {
-          if (!prev.has(path)) return prev;
-          const next = new Set(prev);
-          next.delete(path);
-          return next;
-        });
       }
     }
   }, [saveFile, setActiveFileContent, readOnly]);
@@ -247,14 +241,6 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
           if (activeFilePath) {
             setActiveFileContent(content);
             saveFile(activeFilePath, content);
-            // Update saved content reference and clear modified flag
-            savedContentRef.current.set(activeFilePath, content);
-            setModifiedFiles((prev) => {
-              if (!prev.has(activeFilePath)) return prev;
-              const next = new Set(prev);
-              next.delete(activeFilePath);
-              return next;
-            });
           }
         }, 1500);
       }
@@ -340,7 +326,6 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
     <div className="flex h-screen flex-col bg-gray-950">
       <Toolbar
         projectName={currentProject.name}
-        saving={savingFile}
         githubLinked={!!currentProject.githubRepoFullName}
         errorCount={error ? 1 : 0}
         showingCompilerOutput={showCompilerOutput}
@@ -375,12 +360,13 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
                   ) : (
                     <FileTree
                       files={currentProject.files}
-                      activeFilePath={activeFilePath}
+                      activeFilePath={showHistory ? historySelectedFile : activeFilePath}
                       mainFile={currentProject.mainFile}
-                      modifiedFiles={modifiedFiles}
-                      onSelectFile={handleOpenFile}
+                      modifiedFiles={currentProject.githubRepoFullName ? modifiedFiles : undefined}
+                      onSelectFile={showHistory ? (path: string) => setHistorySelectedFile(path) : handleOpenFile}
+                      onDoubleClickFile={showHistory ? (path: string) => setHistoryFileFilter(path) : undefined}
                       onDownloadFile={handleDownloadFile}
-                      onResetFile={handleResetFile}
+                      onResetFile={currentProject.githubRepoFullName ? handleResetFile : undefined}
                       {...(!readOnly && {
                         onCreateFile: handleCreateFile,
                         onDeleteFile: deleteFile,
@@ -468,7 +454,10 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
           <Panel id="history-view" order={2} defaultSize={85}>
             <HistoryView
               projectId={projectId}
-              onClose={() => setShowHistory(false)}
+              selectedFile={historySelectedFile}
+              fileFilter={historyFileFilter}
+              onClearFileFilter={() => setHistoryFileFilter(null)}
+              onClose={() => { setShowHistory(false); setHistoryFileFilter(null); setHistorySelectedFile(null); }}
             />
           </Panel>
         ) : activeFilePath ? (
