@@ -10,6 +10,7 @@ import {
   readProjectFile,
   readProjectFileBinary,
 } from "../lib/storage.js";
+import { buildVfsFileList } from "./projects.js";
 
 const share = new Hono();
 
@@ -168,26 +169,7 @@ share.get("/shared/:token/files-all", async (c) => {
 
   const projectId = link.projectId;
   const files = listProjectFiles(projectId);
-  const binaryExts = [".png", ".jpg", ".jpeg", ".gif", ".pdf", ".ttf", ".otf", ".woff", ".woff2"];
-
-  const result: Array<{ path: string; content: string; binary: boolean }> = [];
-  for (const file of files) {
-    if (file.isDirectory) continue;
-    const isBinary = binaryExts.some((ext) => file.path.toLowerCase().endsWith(ext));
-    if (isBinary) {
-      const content = readProjectFileBinary(projectId, file.path);
-      if (content) {
-        result.push({ path: file.path, content: content.toString("base64"), binary: true });
-      }
-    } else {
-      const content = readProjectFile(projectId, file.path);
-      if (content !== null) {
-        result.push({ path: file.path, content, binary: false });
-      }
-    }
-  }
-
-  return c.json({ files: result });
+  return c.json({ files: buildVfsFileList(projectId, files) });
 });
 
 // Get individual file via share token
@@ -202,7 +184,7 @@ share.get("/shared/:token/files/*", async (c) => {
 
   if (!filePath) return c.json({ error: "File path required" }, 400);
 
-  const binaryExts = [".png", ".jpg", ".jpeg", ".gif", ".pdf", ".ttf", ".otf", ".woff", ".woff2"];
+  const binaryExts = [".png", ".jpg", ".jpeg", ".gif", ".pdf", ".svg", ".ttf", ".otf", ".woff", ".woff2"];
   const isBinary = binaryExts.some((ext) => filePath.toLowerCase().endsWith(ext));
 
   if (isBinary) {

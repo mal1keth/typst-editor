@@ -136,6 +136,11 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
         if (cancelled) return;
 
         if (result.pulled) {
+          // Cancel pending save to prevent stale content overwriting pulled files
+          if (saveTimerRef.current) {
+            clearTimeout(saveTimerRef.current);
+            saveTimerRef.current = null;
+          }
           setAutoPullStatus(`Pulled ${result.fileCount} files from GitHub`);
           resetModifiedState();
           // Reload the project to pick up new files
@@ -362,7 +367,16 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
                     <GitHubPanel
                       projectId={projectId}
                       onClose={() => setShowGitHub(false)}
-                      onPullComplete={() => { resetModifiedState(); loadProject(projectId); }}
+                      onPullComplete={() => {
+                        // Cancel any pending debounced save to prevent stale
+                        // local content from overwriting freshly pulled files
+                        if (saveTimerRef.current) {
+                          clearTimeout(saveTimerRef.current);
+                          saveTimerRef.current = null;
+                        }
+                        resetModifiedState();
+                        loadProject(projectId);
+                      }}
                     />
                   ) : (
                     <FileTree

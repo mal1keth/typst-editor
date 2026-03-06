@@ -11,6 +11,7 @@ import {
   listProjectFiles,
   readProjectFileBinary,
   ensureProjectDir,
+  deleteProjectDir,
 } from "../lib/storage.js";
 import { recordEdit, type FileChange } from "../lib/history.js";
 import { nanoid } from "nanoid";
@@ -63,6 +64,8 @@ async function fullImportRepoFiles(
     owner, repo, tree_sha: commitSha, recursive: "true",
   });
 
+  // Wipe project directory to remove orphaned files from previous imports
+  deleteProjectDir(projectId);
   ensureProjectDir(projectId);
 
   await db
@@ -226,6 +229,29 @@ async function incrementalPull(
         eq(schema.projectFiles.path, delPath),
       )
     );
+  }
+
+  // Clean orphaned disk files not in the remote git tree.
+  // This handles files that were previously imported but are no longer tracked
+  // (e.g. from a past full import that left stale files on disk).
+  const remotePaths = new Set(
+    newTree.tree.filter((i) => i.type === "blob" && i.path).map((i) => i.path!)
+  );
+  const remoteDirs = new Set(
+    newTree.tree.filter((i) => i.type === "tree" && i.path).map((i) => i.path!)
+  );
+  const diskFiles = listProjectFiles(projectId);
+  for (const file of diskFiles) {
+    if (file.isDirectory) continue;
+    if (!remotePaths.has(file.path)) {
+      deleteProjectFile(projectId, file.path);
+      await db.delete(schema.projectFiles).where(
+        and(
+          eq(schema.projectFiles.projectId, projectId),
+          eq(schema.projectFiles.path, file.path),
+        )
+      );
+    }
   }
 
   return { fileCount: changedBlobs.length + deletedPaths.length, fileChanges };
