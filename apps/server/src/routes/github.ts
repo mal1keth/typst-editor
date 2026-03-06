@@ -434,85 +434,90 @@ github.post(
     const branch = project.githubBranch || "main";
     const octokit = getOctokit(token);
 
-    // Get current HEAD
-    const { data: ref } = await octokit.rest.git.getRef({
-      owner,
-      repo,
-      ref: `heads/${branch}`,
-    });
-    const parentSha = ref.object.sha;
-
-    // Check for conflicts
-    if (
-      project.githubLastSyncSha &&
-      project.githubLastSyncSha !== parentSha
-    ) {
-      return c.json(
-        {
-          error: "Remote has new commits. Pull first.",
-          localSha: project.githubLastSyncSha,
-          remoteSha: parentSha,
-        },
-        409
-      );
-    }
-
-    // Create blobs and tree entries (parallel, concurrency-limited)
-    const files = listProjectFiles(projectId).filter((f) => !f.isDirectory);
-    const treeEntries = (await concurrentMap(files, async (file) => {
-      const content = readProjectFileBinary(projectId, file.path);
-      if (!content) return null;
-
-      const { data: blob } = await octokit.rest.git.createBlob({
+    try {
+      // Get current HEAD
+      const { data: ref } = await octokit.rest.git.getRef({
         owner,
         repo,
-        content: content.toString("base64"),
-        encoding: "base64",
+        ref: `heads/${branch}`,
+      });
+      const parentSha = ref.object.sha;
+
+      // Check for conflicts
+      if (
+        project.githubLastSyncSha &&
+        project.githubLastSyncSha !== parentSha
+      ) {
+        return c.json(
+          {
+            error: "Remote has new commits. Pull first.",
+            localSha: project.githubLastSyncSha,
+            remoteSha: parentSha,
+          },
+          409
+        );
+      }
+
+      // Create blobs and tree entries (parallel, concurrency-limited)
+      const files = listProjectFiles(projectId).filter((f) => !f.isDirectory);
+      const treeEntries = (await concurrentMap(files, async (file) => {
+        const content = readProjectFileBinary(projectId, file.path);
+        if (!content) return null;
+
+        const { data: blob } = await octokit.rest.git.createBlob({
+          owner,
+          repo,
+          content: content.toString("base64"),
+          encoding: "base64",
+        });
+
+        return {
+          path: file.path,
+          mode: "100644" as const,
+          type: "blob" as const,
+          sha: blob.sha,
+        };
+      })).filter((e): e is NonNullable<typeof e> => e !== null);
+
+      // Create tree
+      const { data: tree } = await octokit.rest.git.createTree({
+        owner,
+        repo,
+        tree: treeEntries,
+        base_tree: parentSha,
       });
 
-      return {
-        path: file.path,
-        mode: "100644" as const,
-        type: "blob" as const,
-        sha: blob.sha,
-      };
-    })).filter((e): e is NonNullable<typeof e> => e !== null);
+      // Create commit
+      const { data: commit } = await octokit.rest.git.createCommit({
+        owner,
+        repo,
+        message: body.commitMessage.trim(),
+        tree: tree.sha,
+        parents: [parentSha],
+      });
 
-    // Create tree
-    const { data: tree } = await octokit.rest.git.createTree({
-      owner,
-      repo,
-      tree: treeEntries,
-      base_tree: parentSha,
-    });
+      // Update ref
+      await octokit.rest.git.updateRef({
+        owner,
+        repo,
+        ref: `heads/${branch}`,
+        sha: commit.sha,
+      });
 
-    // Create commit
-    const { data: commit } = await octokit.rest.git.createCommit({
-      owner,
-      repo,
-      message: body.commitMessage.trim(),
-      tree: tree.sha,
-      parents: [parentSha],
-    });
+      // Update local sync sha
+      await db
+        .update(schema.projects)
+        .set({
+          githubLastSyncSha: commit.sha,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(schema.projects.id, projectId));
 
-    // Update ref
-    await octokit.rest.git.updateRef({
-      owner,
-      repo,
-      ref: `heads/${branch}`,
-      sha: commit.sha,
-    });
-
-    // Update local sync sha
-    await db
-      .update(schema.projects)
-      .set({
-        githubLastSyncSha: commit.sha,
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(schema.projects.id, projectId));
-
-    return c.json({ ok: true, commitSha: commit.sha });
+      return c.json({ ok: true, commitSha: commit.sha });
+    } catch (e: any) {
+      const msg = e?.response?.data?.message || e?.message || String(e);
+      return c.json({ error: `Push failed: ${msg}` }, 500);
+    }
   }
 );
 
