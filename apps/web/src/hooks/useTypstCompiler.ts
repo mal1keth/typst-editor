@@ -71,15 +71,29 @@ function getWorker(): Worker {
 
   workerInstance.onerror = (e) => {
     console.error("Compiler worker error:", e);
+    // Reject all pending promises so callers don't hang forever
+    for (const { reject } of workerPending.values()) {
+      reject(new Error("Worker error"));
+    }
+    workerPending.clear();
   };
 
   return workerInstance;
 }
 
-function sendToWorker(msg: Record<string, any>): Promise<any> {
+function sendToWorker(msg: Record<string, any>, timeoutMs = 60000): Promise<any> {
   return new Promise((resolve, reject) => {
     const id = workerNextId++;
-    workerPending.set(id, { resolve, reject });
+    const timer = setTimeout(() => {
+      if (workerPending.has(id)) {
+        workerPending.delete(id);
+        reject(new Error("Compile timed out"));
+      }
+    }, timeoutMs);
+    workerPending.set(id, {
+      resolve: (v) => { clearTimeout(timer); resolve(v); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
+    });
     getWorker().postMessage({ id, ...msg });
   });
 }

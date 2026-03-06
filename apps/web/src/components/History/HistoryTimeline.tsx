@@ -11,15 +11,19 @@ interface Props {
 }
 
 function timeAgo(dateStr: string): string {
-  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  // SQLite datetime('now') stores UTC without a Z suffix — append it so JS parses as UTC
+  const date = new Date(dateStr.endsWith("Z") ? dateStr : dateStr + "Z");
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
   if (seconds < 60) return "just now";
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) {
+    return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Date(dateStr).toLocaleDateString();
+  if (days < 7) return `${days}d ago`;
+  return date.toLocaleDateString();
 }
 
 function sourceLabel(source: string): { text: string; className: string } {
@@ -35,6 +39,14 @@ function sourceLabel(source: string): { text: string; className: string } {
   }
 }
 
+function diffTypeIcon(diffType: string) {
+  switch (diffType) {
+    case "create": return { char: "+", className: "text-green-400" };
+    case "delete": return { char: "−", className: "text-red-400" };
+    default: return { char: "~", className: "text-blue-400" };
+  }
+}
+
 export const HistoryTimeline = memo(function HistoryTimeline({
   groups,
   selectedGroupId,
@@ -47,7 +59,8 @@ export const HistoryTimeline = memo(function HistoryTimeline({
   const dayGroups = useMemo(() => {
     const days = new Map<string, HistoryGroup[]>();
     for (const g of groups) {
-      const day = new Date(g.lastEditAt || g.createdAt).toLocaleDateString(undefined, {
+      const raw = g.lastEditAt || g.createdAt;
+      const day = new Date(raw.endsWith("Z") ? raw : raw + "Z").toLocaleDateString(undefined, {
         weekday: "short",
         month: "short",
         day: "numeric",
@@ -104,7 +117,7 @@ export const HistoryTimeline = memo(function HistoryTimeline({
                 <div
                   key={group.groupId}
                   className={`cursor-pointer border-b border-gray-800/50 px-3 py-2 transition-colors ${
-                    isSelected ? "bg-blue-900/30" : "hover:bg-gray-800/50"
+                    isSelected ? "bg-blue-900/20" : "hover:bg-gray-800/50"
                   }`}
                   onClick={() => onSelectGroup(group.groupId)}
                 >
@@ -130,7 +143,7 @@ export const HistoryTimeline = memo(function HistoryTimeline({
                   </div>
 
                   {/* Source badge + summary */}
-                  <div className="mt-1 flex items-center gap-2">
+                  <div className="mt-1 ml-7 flex items-center gap-2">
                     <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${badge.className}`}>
                       {badge.text}
                     </span>
@@ -139,19 +152,23 @@ export const HistoryTimeline = memo(function HistoryTimeline({
                     )}
                   </div>
 
-                  {/* Changed files */}
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {group.changedFiles.slice(0, 4).map((f) => (
-                      <span
-                        key={f.path}
-                        className="rounded bg-gray-800/80 px-1.5 py-0.5 text-[10px] text-gray-400"
-                      >
-                        {f.path.split("/").pop()}
-                      </span>
-                    ))}
-                    {group.changedFiles.length > 4 && (
-                      <span className="text-[10px] text-gray-500">
-                        +{group.changedFiles.length - 4} more
+                  {/* Changed files — plain text list */}
+                  <div className="mt-1 ml-7 flex flex-wrap gap-x-2 gap-y-0.5">
+                    {group.changedFiles.slice(0, 6).map((f) => {
+                      const icon = diffTypeIcon(f.diffType);
+                      return (
+                        <span
+                          key={f.path}
+                          className="flex items-center gap-1 text-[11px] text-gray-500"
+                        >
+                          <span className={`font-mono text-[10px] ${icon.className}`}>{icon.char}</span>
+                          <span>{f.path.split("/").pop()}</span>
+                        </span>
+                      );
+                    })}
+                    {group.changedFiles.length > 6 && (
+                      <span className="text-[10px] text-gray-600">
+                        +{group.changedFiles.length - 6} more
                       </span>
                     )}
                   </div>
