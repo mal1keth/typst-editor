@@ -138,11 +138,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   deleteFile: async (path: string) => {
-    const { currentProject, loadProject, readOnly } = get();
+    const { currentProject, readOnly, activeFilePath } = get();
     if (!currentProject || readOnly) return;
 
     await api.files.delete(currentProject.id, path);
-    await loadProject(currentProject.id);
+    // Update locally instead of full reload
+    const files = currentProject.files.filter((f) => f.path !== path && !f.path.startsWith(path + "/"));
+    set({
+      currentProject: { ...currentProject, files },
+      ...(activeFilePath === path ? { activeFilePath: null, activeFileContent: null } : {}),
+    });
   },
 
   setActiveFileContent: (content: string) => {
