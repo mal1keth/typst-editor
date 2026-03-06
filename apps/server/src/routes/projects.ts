@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { db, schema } from "../db/index.js";
-import { eq, or, and } from "drizzle-orm";
+import { eq, or, and, desc, sql } from "drizzle-orm";
 import { requireAuth } from "../middleware/auth.js";
 import { requireProjectAccess } from "../middleware/permissions.js";
 import {
@@ -13,6 +13,7 @@ import {
   deleteProjectDir,
   listProjectFiles,
 } from "../lib/storage.js";
+import { recordEdit } from "../lib/history.js";
 
 const projects = new Hono();
 
@@ -243,7 +244,24 @@ projects.put(
     }
 
     const body = await c.req.json<{ content: string }>();
+    const oldContent = readProjectFile(projectId, filePath);
     writeProjectFile(projectId, filePath, body.content);
+
+    // Record edit history
+    const { userId } = c.get("user");
+    if (oldContent !== body.content) {
+      recordEdit({
+        projectId,
+        userId,
+        source: "edit",
+        files: [{
+          path: filePath,
+          diffType: oldContent != null ? "modify" : "create",
+          oldContent: oldContent,
+          newContent: body.content,
+        }],
+      }).catch(() => {}); // Best-effort
+    }
 
     // Upsert file metadata
     const existing = await db.query.projectFiles.findFirst({
@@ -300,6 +318,20 @@ projects.post(
       mkdirSync(getFilePath(projectId, filePath), { recursive: true });
     } else {
       writeProjectFile(projectId, filePath, body.content || "");
+
+      // Record edit history for file creation
+      const { userId } = c.get("user");
+      recordEdit({
+        projectId,
+        userId,
+        source: "file_create",
+        files: [{
+          path: filePath,
+          diffType: "create",
+          oldContent: null,
+          newContent: body.content || "",
+        }],
+      }).catch(() => {});
     }
 
     await db.insert(schema.projectFiles).values({
@@ -328,7 +360,24 @@ projects.delete(
       return c.json({ error: "File path required" }, 400);
     }
 
+    // Read old content before deleting for history
+    const oldContent = readProjectFile(projectId, filePath);
+
     deleteProjectFile(projectId, filePath);
+
+    // Record edit history for file deletion
+    const { userId } = c.get("user");
+    recordEdit({
+      projectId,
+      userId,
+      source: "file_delete",
+      files: [{
+        path: filePath,
+        diffType: "delete",
+        oldContent,
+        newContent: null,
+      }],
+    }).catch(() => {});
 
     await db
       .delete(schema.projectFiles)
@@ -340,6 +389,138 @@ projects.delete(
       );
 
     return c.json({ ok: true });
+  }
+);
+
+// ── Edit History endpoints ──────────────────────────
+
+// List edit history (grouped by group_id)
+projects.get(
+  "/:projectId/history",
+  requireProjectAccess("read"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const limit = Math.min(parseInt(c.req.query("limit") || "50"), 200);
+    const offset = parseInt(c.req.query("offset") || "0");
+
+    // Get distinct groups with their latest entry
+    const rows = await db.all<any>(sql`
+      SELECT
+        h.group_id,
+        h.user_id,
+        h.source,
+        h.summary,
+        MIN(h.created_at) as first_edit_at,
+        MAX(h.created_at) as last_edit_at,
+        u.display_name,
+        u.avatar_url
+      FROM edit_history h
+      LEFT JOIN users u ON h.user_id = u.id
+      WHERE h.project_id = ${projectId}
+      GROUP BY h.group_id
+      ORDER BY MAX(h.created_at) DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `);
+
+    // Get changed files for each group
+    const groups = await Promise.all(
+      rows.map(async (row: any) => {
+        const files = await db.all<any>(sql`
+          SELECT DISTINCT ehf.file_path, ehf.diff_type
+          FROM edit_history_files ehf
+          INNER JOIN edit_history eh ON ehf.history_id = eh.id
+          WHERE eh.group_id = ${row.group_id}
+        `);
+
+        return {
+          groupId: row.group_id,
+          userId: row.user_id,
+          displayName: row.display_name || "Unknown",
+          avatarUrl: row.avatar_url,
+          source: row.source,
+          summary: row.summary,
+          changedFiles: files.map((f: any) => ({
+            path: f.file_path,
+            diffType: f.diff_type,
+          })),
+          createdAt: row.first_edit_at,
+          lastEditAt: row.last_edit_at,
+        };
+      })
+    );
+
+    return c.json(groups);
+  }
+);
+
+// Get full details for a history group (all files with diffs)
+projects.get(
+  "/:projectId/history/group/:groupId",
+  requireProjectAccess("read"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const groupId = c.req.param("groupId");
+
+    const entries = await db.all<any>(sql`
+      SELECT ehf.file_path, ehf.diff_type, ehf.unified_diff
+      FROM edit_history_files ehf
+      INNER JOIN edit_history eh ON ehf.history_id = eh.id
+      WHERE eh.project_id = ${projectId} AND eh.group_id = ${groupId}
+      ORDER BY ehf.file_path
+    `);
+
+    return c.json({
+      groupId,
+      entries: entries.map((e: any) => ({
+        filePath: e.file_path,
+        diffType: e.diff_type,
+        unifiedDiff: e.unified_diff,
+      })),
+    });
+  }
+);
+
+// Get history for a specific file
+projects.get(
+  "/:projectId/history/file/*",
+  requireProjectAccess("read"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const filePath = decodeURIComponent(
+      c.req.path.replace(`/api/projects/${projectId}/history/file/`, "")
+    );
+    const limit = Math.min(parseInt(c.req.query("limit") || "20"), 100);
+
+    const rows = await db.all<any>(sql`
+      SELECT
+        eh.group_id,
+        eh.user_id,
+        eh.source,
+        eh.created_at,
+        ehf.diff_type,
+        ehf.unified_diff,
+        u.display_name,
+        u.avatar_url
+      FROM edit_history_files ehf
+      INNER JOIN edit_history eh ON ehf.history_id = eh.id
+      LEFT JOIN users u ON eh.user_id = u.id
+      WHERE eh.project_id = ${projectId} AND ehf.file_path = ${filePath}
+      ORDER BY eh.created_at DESC
+      LIMIT ${limit}
+    `);
+
+    return c.json(
+      rows.map((r: any) => ({
+        groupId: r.group_id,
+        userId: r.user_id,
+        displayName: r.display_name || "Unknown",
+        avatarUrl: r.avatar_url,
+        source: r.source,
+        diffType: r.diff_type,
+        unifiedDiff: r.unified_diff,
+        createdAt: r.created_at,
+      }))
+    );
   }
 );
 

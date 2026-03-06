@@ -112,6 +112,13 @@ self.onmessage = async (e: MessageEvent) => {
 
       // Compile
       const format = msg.format ?? 0;
+
+      // PDF export: always reset before compiling to avoid false "duplicate label"
+      // errors from typst.ts 0.7.0-rc2's addSource state accumulation.
+      if (format === 1) {
+        await c.reset();
+      }
+
       const compileResult = await c.compile({
         mainFilePath: "/" + msg.mainFilePath,
         root: "/",
@@ -126,23 +133,24 @@ self.onmessage = async (e: MessageEvent) => {
           { id: msg.id, type: "compiled", success: true, result, diagnostics: [] },
           [result.buffer]
         );
-      } else if (format === 0) {
-        // Vector compile failed — run diagnostic compile for error details
-        const diagResult = await c.compile({
-          mainFilePath: "/" + msg.mainFilePath,
-          root: "/",
-          format: 0,
-          diagnostics: "full",
-        });
-        const diags = diagResult.diagnostics ?? compileResult.diagnostics ?? [];
+      } else {
+        // Compilation failed — run diagnostic compile for error details
+        let diags: any[] = compileResult.diagnostics ?? [];
+        if (diags.length === 0) {
+          try {
+            const diagResult = await c.compile({
+              mainFilePath: "/" + msg.mainFilePath,
+              root: "/",
+              format: 0,
+              diagnostics: "full",
+            });
+            diags = diagResult.diagnostics ?? [];
+          } catch {
+            // Diagnostic compile also failed — use what we have
+          }
+        }
         self.postMessage({
           id: msg.id, type: "compiled", success: false, result: null, diagnostics: diags,
-        });
-      } else {
-        // PDF compile failed
-        self.postMessage({
-          id: msg.id, type: "compiled", success: false, result: null,
-          diagnostics: compileResult.diagnostics ?? [],
         });
       }
 
@@ -154,6 +162,14 @@ self.onmessage = async (e: MessageEvent) => {
       self.postMessage({ id: msg.id, type: "reset" });
     }
   } catch (err: any) {
-    self.postMessage({ id: msg.id, type: "error", error: err?.message || String(err) });
+    // WASM exceptions may contain raw Rust Debug output like:
+    // [SourceDiagnostic { severity: Error, ... message: "...", ... }]
+    // Extract human-readable messages from that format.
+    let errorMsg = err?.message || String(err);
+    const rawMessages = [...errorMsg.matchAll(/message:\s*"([^"]+)"/g)].map(m => m[1]);
+    if (rawMessages.length > 0) {
+      errorMsg = rawMessages.join("\n");
+    }
+    self.postMessage({ id: msg.id, type: "error", error: errorMsg });
   }
 };

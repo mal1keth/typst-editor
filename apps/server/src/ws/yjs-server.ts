@@ -1,5 +1,6 @@
 import * as Y from "yjs";
 import { readProjectFile, writeProjectFile } from "../lib/storage.js";
+import { recordEdit } from "../lib/history.js";
 
 // ── User info passed from the WS upgrade handler ──────────────────────
 export interface WsUserInfo {
@@ -17,6 +18,8 @@ interface DocState {
   filePath: string;
   saveTimer: ReturnType<typeof setTimeout> | null;
   gcTimer: ReturnType<typeof setTimeout> | null;
+  recentEditors: Map<string, WsUserInfo>;
+  previousContent: string | null;
 }
 
 const docs = new Map<string, DocState>();
@@ -47,6 +50,8 @@ function getOrCreateDoc(projectId: string, filePath: string): DocState {
       filePath,
       saveTimer: null,
       gcTimer: null,
+      recentEditors: new Map(),
+      previousContent: content ?? "",
     };
 
     // Track changes
@@ -78,8 +83,30 @@ function scheduleSave(state: DocState) {
 function persistDoc(state: DocState) {
   if (!state.dirty) return;
   const ytext = state.doc.getText("content");
-  const content = ytext.toString();
-  writeProjectFile(state.projectId, state.filePath, content);
+  const newContent = ytext.toString();
+  const oldContent = state.previousContent;
+
+  // Record edit history if content actually changed and we have editors
+  if (oldContent !== null && oldContent !== newContent && state.recentEditors.size > 0) {
+    const firstEditor = state.recentEditors.values().next().value;
+    recordEdit({
+      projectId: state.projectId,
+      userId: firstEditor?.userId ?? null,
+      source: "edit",
+      files: [{
+        path: state.filePath,
+        diffType: "modify",
+        oldContent,
+        newContent,
+      }],
+    }).catch((err) => {
+      console.error("Failed to record edit history:", err);
+    });
+  }
+
+  state.previousContent = newContent;
+  state.recentEditors.clear();
+  writeProjectFile(state.projectId, state.filePath, newContent);
   state.dirty = false;
 }
 
@@ -203,6 +230,11 @@ export function handleYjsConnection(
       if (msg.type === "update") {
         // Reject updates from read-only users
         if (permission === "read") return;
+
+        // Track who made this edit for history attribution
+        if (userInfo) {
+          state.recentEditors.set(userInfo.userId, userInfo);
+        }
 
         const update = new Uint8Array(msg.data);
         Y.applyUpdate(doc, update);
