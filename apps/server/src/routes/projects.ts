@@ -490,11 +490,21 @@ projects.get(
     const projectId = c.req.param("projectId");
     const groupId = c.req.param("groupId");
 
+    // Get the latest diff per file path within the group
+    // (multiple persist cycles may create duplicate entries for the same file)
     const entries = await db.all<any>(sql`
       SELECT ehf.file_path, ehf.diff_type, ehf.unified_diff
       FROM edit_history_files ehf
       INNER JOIN edit_history eh ON ehf.history_id = eh.id
       WHERE eh.project_id = ${projectId} AND eh.group_id = ${groupId}
+        AND eh.created_at = (
+          SELECT MAX(eh2.created_at)
+          FROM edit_history eh2
+          INNER JOIN edit_history_files ehf2 ON ehf2.history_id = eh2.id
+          WHERE eh2.project_id = ${projectId} AND eh2.group_id = ${groupId}
+            AND ehf2.file_path = ehf.file_path
+        )
+      GROUP BY ehf.file_path
       ORDER BY ehf.file_path
     `);
 
