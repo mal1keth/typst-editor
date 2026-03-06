@@ -81,7 +81,7 @@ function getWorker(): Worker {
   return workerInstance;
 }
 
-function sendToWorker(msg: Record<string, any>, timeoutMs = 60000): Promise<any> {
+function sendToWorker(msg: Record<string, any>, timeoutMs = 30000): Promise<any> {
   return new Promise((resolve, reject) => {
     const id = workerNextId++;
     const timer = setTimeout(() => {
@@ -277,6 +277,12 @@ export function useTypstCompiler(
         }
       } catch (e: any) {
         const message = e?.message || String(e);
+        if (message === "Compile timed out") {
+          // Kill the stuck worker so the next compile starts fresh
+          resetWorker();
+          needsMountRef.current = true;
+          needsResetRef.current = true;
+        }
         if (message !== "Worker reset") {
           setError(message);
           setDiagnostics((prev) => [

@@ -41,6 +41,12 @@ async function ensureCompiler(version: string): Promise<TypstCompiler> {
   return c;
 }
 
+/** Decode a base64 string to Uint8Array using fetch (much faster than atob loop). */
+async function base64ToBytes(b64: string): Promise<Uint8Array> {
+  const res = await fetch(`data:application/octet-stream;base64,${b64}`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
 async function doMount(
   c: TypstCompiler,
   projectId: string,
@@ -49,7 +55,6 @@ async function doMount(
   if (mounted) return false;
 
   // Fetch all file contents in a single request with retry for transient failures.
-  // Use shared endpoint for anonymous access, authenticated endpoint otherwise.
   const url = shareToken
     ? `/api/shared/${shareToken}/files-all`
     : `/api/projects/${projectId}/files-all`;
@@ -77,13 +82,21 @@ async function doMount(
   }
 
   if (data) {
-    for (const file of data.files) {
-      const vfsPath = "/" + file.path;
+    // Deduplicate paths — last occurrence wins (guards against server dupes)
+    const seen = new Set<string>();
+    const deduped = [];
+    for (let i = data.files.length - 1; i >= 0; i--) {
+      const vfsPath = "/" + data.files[i].path;
+      if (!seen.has(vfsPath)) {
+        seen.add(vfsPath);
+        deduped.push(data.files[i]);
+      }
+    }
 
+    for (const file of deduped) {
+      const vfsPath = "/" + file.path;
       if (file.binary) {
-        const raw = atob(file.content);
-        const bytes = new Uint8Array(raw.length);
-        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        const bytes = await base64ToBytes(file.content);
         c.mapShadow(vfsPath, bytes);
       } else {
         c.addSource(vfsPath, file.content);
@@ -123,7 +136,8 @@ self.onmessage = async (e: MessageEvent) => {
         c.addSource("/" + msg.activeFilePath, msg.activeFileContent);
       }
 
-      // Compile
+      // Compile — single pass with diagnostics:"full" to avoid the
+      // label-leak-across-reset WASM bug that the two-compile pattern triggers.
       const format = msg.format ?? 0;
 
       // PDF export: always reset before compiling to avoid false "duplicate label"
@@ -136,34 +150,18 @@ self.onmessage = async (e: MessageEvent) => {
         mainFilePath: "/" + msg.mainFilePath,
         root: "/",
         format,
-        diagnostics: "none",
+        diagnostics: "full",
       });
 
       if (compileResult.result) {
-        // Copy result to a transferable buffer (original may be a WASM memory view)
         const result = new Uint8Array(compileResult.result);
         self.postMessage(
-          { id: msg.id, type: "compiled", success: true, result, diagnostics: [] },
+          { id: msg.id, type: "compiled", success: true, result, diagnostics: compileResult.diagnostics ?? [] },
           [result.buffer]
         );
       } else {
-        // Compilation failed — run diagnostic compile for error details
-        let diags: any[] = compileResult.diagnostics ?? [];
-        if (diags.length === 0) {
-          try {
-            const diagResult = await c.compile({
-              mainFilePath: "/" + msg.mainFilePath,
-              root: "/",
-              format: 0,
-              diagnostics: "full",
-            });
-            diags = diagResult.diagnostics ?? [];
-          } catch {
-            // Diagnostic compile also failed — use what we have
-          }
-        }
         self.postMessage({
-          id: msg.id, type: "compiled", success: false, result: null, diagnostics: diags,
+          id: msg.id, type: "compiled", success: false, result: null, diagnostics: compileResult.diagnostics ?? [],
         });
       }
 

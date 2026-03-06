@@ -156,6 +156,41 @@ projects.delete(
   }
 );
 
+// Binary extensions the Typst compiler can use (images, fonts).
+// PDFs are excluded — the compiler doesn't need them and they bloat the VFS.
+const VFS_BINARY_EXTS = [".png", ".jpg", ".jpeg", ".gif", ".svg", ".ttf", ".otf", ".woff", ".woff2"];
+// Extensions to skip entirely from VFS (never needed by compiler)
+const VFS_SKIP_EXTS = [".pdf"];
+// Max binary file size for VFS (5 MB) — larger files cause compile timeouts
+const VFS_MAX_BINARY_BYTES = 5 * 1024 * 1024;
+
+/** Build the files-all response for compiler VFS mount. */
+export function buildVfsFileList(
+  projectId: string,
+  files: ReturnType<typeof listProjectFiles>,
+): Array<{ path: string; content: string; binary: boolean }> {
+  const result: Array<{ path: string; content: string; binary: boolean }> = [];
+  for (const file of files) {
+    if (file.isDirectory) continue;
+    const lower = file.path.toLowerCase();
+    if (VFS_SKIP_EXTS.some((ext) => lower.endsWith(ext))) continue;
+    const isBinary = VFS_BINARY_EXTS.some((ext) => lower.endsWith(ext));
+    if (isBinary) {
+      if (file.sizeBytes > VFS_MAX_BINARY_BYTES) continue;
+      const content = readProjectFileBinary(projectId, file.path);
+      if (content) {
+        result.push({ path: file.path, content: content.toString("base64"), binary: true });
+      }
+    } else {
+      const content = readProjectFile(projectId, file.path);
+      if (content !== null) {
+        result.push({ path: file.path, content, binary: false });
+      }
+    }
+  }
+  return result;
+}
+
 // Get all file contents (for compiler VFS mount)
 projects.get(
   "/:projectId/files-all",
@@ -163,30 +198,7 @@ projects.get(
   async (c) => {
     const projectId = c.req.param("projectId");
     const files = listProjectFiles(projectId);
-    const binaryExts = [".png", ".jpg", ".jpeg", ".gif", ".pdf", ".ttf", ".otf", ".woff", ".woff2"];
-
-    const result: Array<{ path: string; content: string; binary: boolean }> = [];
-    for (const file of files) {
-      if (file.isDirectory) continue;
-      const isBinary = binaryExts.some((ext) => file.path.toLowerCase().endsWith(ext));
-      if (isBinary) {
-        const content = readProjectFileBinary(projectId, file.path);
-        if (content) {
-          result.push({
-            path: file.path,
-            content: content.toString("base64"),
-            binary: true,
-          });
-        }
-      } else {
-        const content = readProjectFile(projectId, file.path);
-        if (content !== null) {
-          result.push({ path: file.path, content, binary: false });
-        }
-      }
-    }
-
-    return c.json({ files: result });
+    return c.json({ files: buildVfsFileList(projectId, files) });
   }
 );
 
@@ -207,7 +219,7 @@ projects.get(
     }
 
     // Check if binary by extension
-    const binaryExts = [".png", ".jpg", ".jpeg", ".gif", ".pdf", ".ttf", ".otf", ".woff", ".woff2"];
+    const binaryExts = [".png", ".jpg", ".jpeg", ".gif", ".pdf", ".svg", ".ttf", ".otf", ".woff", ".woff2"];
     const isBinary = binaryExts.some((ext) => filePath.toLowerCase().endsWith(ext));
 
     if (isBinary) {
