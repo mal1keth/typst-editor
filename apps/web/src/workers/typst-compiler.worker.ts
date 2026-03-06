@@ -48,20 +48,35 @@ async function doMount(
 ): Promise<boolean> {
   if (mounted) return false;
 
-  // Fetch all file contents in a single request.
+  // Fetch all file contents in a single request with retry for transient failures.
   // Use shared endpoint for anonymous access, authenticated endpoint otherwise.
-  try {
-    const url = shareToken
-      ? `/api/shared/${shareToken}/files-all`
-      : `/api/projects/${projectId}/files-all`;
-    const res = await fetch(url, { credentials: 'include' });
-    if (!res.ok) {
-      console.error(`files-all fetch failed: ${res.status} ${res.statusText}`);
-      mounted = true;
-      return true;
-    }
+  const url = shareToken
+    ? `/api/shared/${shareToken}/files-all`
+    : `/api/projects/${projectId}/files-all`;
 
-    const data = await res.json();
+  let data: { files: Array<{ path: string; content: string; binary: boolean }> } | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(url, { credentials: 'include' });
+      if (!res.ok) {
+        console.error(`files-all fetch failed (attempt ${attempt + 1}): ${res.status}`);
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
+        }
+        break;
+      }
+      data = await res.json();
+      break;
+    } catch (e) {
+      console.error(`Failed to fetch project files (attempt ${attempt + 1}):`, e);
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+  }
+
+  if (data) {
     for (const file of data.files) {
       const vfsPath = "/" + file.path;
 
@@ -74,8 +89,6 @@ async function doMount(
         c.addSource(vfsPath, file.content);
       }
     }
-  } catch (e) {
-    console.error("Failed to fetch project files:", e);
   }
 
   mounted = true;
