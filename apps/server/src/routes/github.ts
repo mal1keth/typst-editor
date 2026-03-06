@@ -371,11 +371,14 @@ github.post(
     });
     const commitSha = ref.object.sha;
 
-    // Incremental pull if we have a previous sync point, full pull otherwise
-    const lastSha = project.githubLastSyncSha;
-    const { fileCount, fileChanges } = lastSha
-      ? await incrementalPull(octokit, owner, repo, lastSha, commitSha, projectId)
-      : await fullImportRepoFiles(octokit, owner, repo, commitSha, projectId);
+    // Always do a full import on manual pull: wipe the project directory and
+    // re-download all files from the remote tree.  This guarantees the local
+    // disk matches the remote exactly, cleaning up any stale/orphaned files
+    // that incremental pull would miss (it only downloads files whose SHA
+    // changed between two commits, not files whose local copy is wrong).
+    const { fileCount, fileChanges } = await fullImportRepoFiles(
+      octokit, owner, repo, commitSha, projectId,
+    );
 
     if (fileChanges.length > 0) {
       recordEdit({
