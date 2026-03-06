@@ -79,6 +79,28 @@ sqlite.exec(`
   );
 
   CREATE UNIQUE INDEX IF NOT EXISTS collab_project_user_idx ON collaborators(project_id, user_id);
+
+  CREATE TABLE IF NOT EXISTS edit_history (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id TEXT REFERENCES users(id),
+    source TEXT NOT NULL DEFAULT 'edit',
+    summary TEXT,
+    group_id TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS edit_history_project_idx ON edit_history(project_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS edit_history_files (
+    id TEXT PRIMARY KEY,
+    history_id TEXT NOT NULL REFERENCES edit_history(id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    diff_type TEXT NOT NULL DEFAULT 'modify',
+    unified_diff TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS edit_history_files_idx ON edit_history_files(history_id);
 `);
 
 // Migration: add password_hash column to existing databases

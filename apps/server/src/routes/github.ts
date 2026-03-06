@@ -6,10 +6,12 @@ import { requireAuth } from "../middleware/auth.js";
 import { requireProjectAccess } from "../middleware/permissions.js";
 import {
   writeProjectFile,
+  readProjectFile,
   listProjectFiles,
   readProjectFileBinary,
   ensureProjectDir,
 } from "../lib/storage.js";
+import { recordEdit, type FileChange } from "../lib/history.js";
 import { nanoid } from "nanoid";
 
 const github = new Hono();
@@ -28,14 +30,15 @@ async function getUserToken(userId: string): Promise<string | null> {
   return user?.githubAccessToken || null;
 }
 
-// Shared helper: download all files from a GitHub repo tree into a project
+// Shared helper: download all files from a GitHub repo tree into a project.
+// Returns { fileCount, fileChanges } — fileChanges can be used for edit history.
 async function pullRepoFiles(
   octokit: Octokit,
   owner: string,
   repo: string,
   commitSha: string,
   projectId: string
-): Promise<number> {
+): Promise<{ fileCount: number; fileChanges: FileChange[] }> {
   const { data: tree } = await octokit.rest.git.getTree({
     owner,
     repo,
@@ -51,8 +54,15 @@ async function pullRepoFiles(
     .where(eq(schema.projectFiles.projectId, projectId));
 
   let fileCount = 0;
+  const fileChanges: FileChange[] = [];
+  const textExts = [".typ", ".txt", ".md", ".bib", ".csv", ".json", ".yaml", ".yml", ".toml", ".xml", ".html", ".css", ".js", ".ts"];
+
   for (const item of tree.tree) {
     if (item.type === "blob" && item.path && item.sha) {
+      // Read old content before overwriting (only for text files, to keep diffs small)
+      const isText = textExts.some((ext) => item.path!.toLowerCase().endsWith(ext));
+      const oldContent = isText ? readProjectFile(projectId, item.path) : null;
+
       const { data: blob } = await octokit.rest.git.getBlob({
         owner,
         repo,
@@ -61,6 +71,19 @@ async function pullRepoFiles(
 
       const content = Buffer.from(blob.content, "base64");
       writeProjectFile(projectId, item.path, content);
+
+      // Track text file changes for history
+      if (isText) {
+        const newContent = content.toString("utf-8");
+        if (oldContent !== newContent) {
+          fileChanges.push({
+            path: item.path,
+            diffType: oldContent != null ? "modify" : "create",
+            oldContent,
+            newContent,
+          });
+        }
+      }
 
       await db.insert(schema.projectFiles).values({
         id: nanoid(),
@@ -81,7 +104,7 @@ async function pullRepoFiles(
     }
   }
 
-  return fileCount;
+  return { fileCount, fileChanges };
 }
 
 // List user's repos
@@ -198,7 +221,18 @@ github.post(
     });
     const commitSha = ref.object.sha;
 
-    const fileCount = await pullRepoFiles(octokit, owner, repo, commitSha, projectId);
+    const { fileCount, fileChanges } = await pullRepoFiles(octokit, owner, repo, commitSha, projectId);
+
+    // Record edit history for the pull
+    if (fileChanges.length > 0) {
+      recordEdit({
+        projectId,
+        userId,
+        source: "github_pull",
+        files: fileChanges,
+        summary: `Pulled ${fileCount} files from GitHub`,
+      }).catch(() => {});
+    }
 
     await db
       .update(schema.projects)
@@ -427,7 +461,19 @@ github.post(
       }
 
       // Out of sync — pull new files
-      const fileCount = await pullRepoFiles(octokit, owner, repo, remoteSha, projectId);
+      const { fileCount, fileChanges } = await pullRepoFiles(octokit, owner, repo, remoteSha, projectId);
+
+      // Record edit history for auto-pull
+      if (fileChanges.length > 0) {
+        const { userId } = c.get("user");
+        recordEdit({
+          projectId,
+          userId,
+          source: "github_pull",
+          files: fileChanges,
+          summary: `Auto-pulled ${fileCount} files from GitHub`,
+        }).catch(() => {});
+      }
 
       await db
         .update(schema.projects)
@@ -556,7 +602,8 @@ github.post("/import", async (c) => {
   });
 
   // Download all files
-  const fileCount = await pullRepoFiles(octokit, owner, repo, commitSha, projectId);
+  const { fileCount } = await pullRepoFiles(octokit, owner, repo, commitSha, projectId);
+  // No history for initial import — it's the baseline
 
   // Update sync SHA
   await db
