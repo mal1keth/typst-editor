@@ -68,8 +68,10 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
   // Track modified (unsaved) files — stores path → saved content for comparison
   const [modifiedFiles, setModifiedFiles] = useState<Set<string>>(new Set());
   const savedContentRef = useRef<Map<string, string>>(new Map());
+  // Incremented to force editor remount (e.g. after file reset)
+  const [editorResetKey, setEditorResetKey] = useState(0);
 
-  // Stable initial content — only recomputes when switching files.
+  // Stable initial content — only recomputes when switching files or resetting.
   const editorInitialContent = useMemo(() => {
     const content = useProjectStore.getState().activeFileContent;
     contentRef.current = content;
@@ -79,7 +81,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
     }
     return content || "";
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeFilePath]);
+  }, [activeFilePath, editorResetKey]);
 
   const { error, compiling, diagnostics, clearDiagnostics, pages, artifactContent, renderer, triggerCompile } =
     useTypstCompiler(
@@ -295,18 +297,17 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
           next.delete(path);
           return next;
         });
-        // If it's the active file, reload the editor
+        // If it's the active file, update content and force editor remount
         if (path === activeFilePath) {
           setActiveFileContent(data.content);
           contentRef.current = data.content;
-          // Force editor remount by re-opening the file
-          openFile(path);
+          setEditorResetKey((k) => k + 1);
         }
       } catch {
         // Ignore errors
       }
     },
-    [currentProject, activeFilePath, setActiveFileContent, openFile]
+    [currentProject, activeFilePath, setActiveFileContent]
   );
 
   const handleExportPdf = useCallback(async () => {
@@ -476,7 +477,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
               <PanelGroup direction="vertical" autoSaveId="editor-vertical">
                 <Panel id="editor-code" order={1} defaultSize={showCompilerOutput ? 70 : 100} minSize={30}>
                   <EditorPanel
-                    key={activeFilePath}
+                    key={`${activeFilePath}:${editorResetKey}`}
                     initialContent={editorInitialContent}
                     onChange={handleChange}
                   />
