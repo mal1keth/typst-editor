@@ -114,23 +114,43 @@ function getOrCreatePresence(projectId: string): ProjectPresence {
   return p;
 }
 
-/** Build deduplicated user list for broadcast (unique by userId) */
+/** Build deduplicated user list for broadcast (unique by userId).
+ *  Anonymous connections (null userInfo) are counted and included as one entry. */
 function getPresenceUsers(presence: ProjectPresence): Array<{
   userId: string;
   displayName: string;
   avatarUrl: string | null;
+  anonymous?: boolean;
 }> {
-  const seen = new Map<string, { userId: string; displayName: string; avatarUrl: string | null }>();
+  const seen = new Map<string, { userId: string; displayName: string; avatarUrl: string | null; anonymous?: boolean }>();
+  let anonCount = 0;
+
   for (const info of presence.conns.values()) {
-    if (info && !seen.has(info.userId)) {
-      seen.set(info.userId, {
-        userId: info.userId,
-        displayName: info.displayName,
-        avatarUrl: info.avatarUrl,
-      });
+    if (info) {
+      if (!seen.has(info.userId)) {
+        seen.set(info.userId, {
+          userId: info.userId,
+          displayName: info.displayName,
+          avatarUrl: info.avatarUrl,
+        });
+      }
+    } else {
+      anonCount++;
     }
   }
-  return Array.from(seen.values());
+
+  const result = Array.from(seen.values());
+
+  if (anonCount > 0) {
+    result.push({
+      userId: "__anonymous__",
+      displayName: anonCount === 1 ? "Anonymous" : `${anonCount} anonymous`,
+      avatarUrl: null,
+      anonymous: true,
+    });
+  }
+
+  return result;
 }
 
 function broadcastPresence(projectId: string) {

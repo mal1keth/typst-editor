@@ -312,8 +312,12 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
                                 className="h-5 w-5 rounded-full border border-gray-700 object-cover"
                               />
                             ) : (
-                              <div className="flex h-5 w-5 items-center justify-center rounded-full border border-gray-700 bg-gray-700 text-[10px] font-medium text-gray-300">
-                                {u.displayName.charAt(0).toUpperCase()}
+                              <div className={`flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-medium ${
+                                u.anonymous
+                                  ? "border-gray-600 bg-gray-800 text-gray-500"
+                                  : "border-gray-700 bg-gray-700 text-gray-300"
+                              }`}>
+                                {u.anonymous ? "A" : u.displayName.charAt(0).toUpperCase()}
                               </div>
                             )}
                             <div className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-1 text-[10px] text-gray-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
