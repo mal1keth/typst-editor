@@ -65,10 +65,18 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
   // Tracks when the user last typed — compile hook defers rendering until this passes
   const typingUntilRef = useRef(0);
 
+  // Track modified (unsaved) files — stores path → saved content for comparison
+  const [modifiedFiles, setModifiedFiles] = useState<Set<string>>(new Set());
+  const savedContentRef = useRef<Map<string, string>>(new Map());
+
   // Stable initial content — only recomputes when switching files.
   const editorInitialContent = useMemo(() => {
     const content = useProjectStore.getState().activeFileContent;
     contentRef.current = content;
+    // Store the saved version for modification detection
+    if (activeFilePath && content !== null) {
+      savedContentRef.current.set(activeFilePath, content);
+    }
     return content || "";
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeFilePath]);
@@ -146,6 +154,13 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
       if (path && content !== null && !readOnly) {
         setActiveFileContent(content);
         saveFile(path, content);
+        savedContentRef.current.set(path, content);
+        setModifiedFiles((prev) => {
+          if (!prev.has(path)) return prev;
+          const next = new Set(prev);
+          next.delete(path);
+          return next;
+        });
       }
     }
   }, [saveFile, setActiveFileContent, readOnly]);
@@ -203,6 +218,26 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
         applyLocalChange(collabRef.current, changes);
       }
 
+      // Track modification state
+      if (activeFilePath) {
+        const saved = savedContentRef.current.get(activeFilePath);
+        const isModified = saved !== content;
+        setModifiedFiles((prev) => {
+          const has = prev.has(activeFilePath);
+          if (isModified && !has) {
+            const next = new Set(prev);
+            next.add(activeFilePath);
+            return next;
+          }
+          if (!isModified && has) {
+            const next = new Set(prev);
+            next.delete(activeFilePath);
+            return next;
+          }
+          return prev;
+        });
+      }
+
       // Debounced save (skip for read-only)
       if (!readOnly) {
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -210,6 +245,14 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
           if (activeFilePath) {
             setActiveFileContent(content);
             saveFile(activeFilePath, content);
+            // Update saved content reference and clear modified flag
+            savedContentRef.current.set(activeFilePath, content);
+            setModifiedFiles((prev) => {
+              if (!prev.has(activeFilePath)) return prev;
+              const next = new Set(prev);
+              next.delete(activeFilePath);
+              return next;
+            });
           }
         }, 1500);
       }
@@ -237,6 +280,33 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
   const handleDownloadFile = useCallback(
     (path: string) => api.files.download(projectId, path),
     [projectId]
+  );
+
+  // Reset a file to its last saved version
+  const handleResetFile = useCallback(
+    async (path: string) => {
+      if (!currentProject) return;
+      try {
+        const data = await api.files.get(currentProject.id, path);
+        savedContentRef.current.set(path, data.content);
+        setModifiedFiles((prev) => {
+          if (!prev.has(path)) return prev;
+          const next = new Set(prev);
+          next.delete(path);
+          return next;
+        });
+        // If it's the active file, reload the editor
+        if (path === activeFilePath) {
+          setActiveFileContent(data.content);
+          contentRef.current = data.content;
+          // Force editor remount by re-opening the file
+          openFile(path);
+        }
+      } catch {
+        // Ignore errors
+      }
+    },
+    [currentProject, activeFilePath, setActiveFileContent, openFile]
   );
 
   const handleExportPdf = useCallback(async () => {
@@ -306,8 +376,10 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
                       files={currentProject.files}
                       activeFilePath={activeFilePath}
                       mainFile={currentProject.mainFile}
+                      modifiedFiles={modifiedFiles}
                       onSelectFile={handleOpenFile}
                       onDownloadFile={handleDownloadFile}
+                      onResetFile={handleResetFile}
                       {...(!readOnly && {
                         onCreateFile: handleCreateFile,
                         onDeleteFile: deleteFile,
