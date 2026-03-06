@@ -11,8 +11,8 @@ interface PreviewPanelProps {
 }
 
 const PIXEL_PER_PT = 2;
-const PAGE_GAP = 8;
-const PADDING = 16;
+const PAGE_GAP = 16;
+const PADDING = 24;
 
 export const PreviewPanel = memo(function PreviewPanel({
   error,
@@ -236,7 +236,7 @@ export const PreviewPanel = memo(function PreviewPanel({
       )}
 
       {/* Scrollable content */}
-      <div ref={scrollRef} className="h-full w-full overflow-auto bg-white">
+      <div ref={scrollRef} className="h-full w-full overflow-auto bg-gray-300">
       {pages.length > 0 && containerWidth > 0 && (
         <div style={{ zoom: zoom !== 1 ? zoom : undefined, padding: PADDING, minHeight: totalHeight }}>
           {pages.map((page, i) => {
@@ -246,18 +246,19 @@ export const PreviewPanel = memo(function PreviewPanel({
             const displayHeight = ch * scale;
 
             return (
-              <div
-                key={i}
-                ref={getPageRef(i)}
-                style={{
-                  width: containerWidth,
-                  height: displayHeight,
-                  position: "relative",
-                  marginBottom: PAGE_GAP,
-                  overflow: "hidden",
-                  backgroundColor: "#ffffff",
-                }}
-              />
+              <div key={i} style={{ marginBottom: PAGE_GAP }}>
+                <div
+                  ref={getPageRef(i)}
+                  style={{
+                    width: containerWidth,
+                    height: displayHeight,
+                    position: "relative",
+                    overflow: "hidden",
+                    backgroundColor: "#ffffff",
+                    boxShadow: "0 1px 4px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.08)",
+                  }}
+                />
+              </div>
             );
           })}
         </div>
