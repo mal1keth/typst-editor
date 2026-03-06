@@ -26,6 +26,9 @@ importers:
       better-sqlite3:
         specifier: ^11
         version: 11.10.0
+      diff:
+        specifier: ^8.0.3
+        version: 8.0.3
       drizzle-orm:
         specifier: ^0.39
         version: 0.39.3(@types/better-sqlite3@7.6.13)(better-sqlite3@11.10.0)
@@ -60,6 +63,9 @@ importers:
       '@types/better-sqlite3':
         specifier: ^7
         version: 7.6.13
+      '@types/diff':
+        specifier: ^7.0.2
+        version: 7.0.2
       drizzle-kit:
         specifier: ^0.30
         version: 0.30.6
@@ -1382,6 +1388,9 @@ packages:
   '@types/better-sqlite3@7.6.13':
     resolution: {integrity: sha512-NMv9ASNARoKksWtsq/SHakpYAYnhBrQgGD8zkLYk/jaK8jUGn08CfEdTRgYhMypUQAfzSP8W6gNLe0q19/t4VA==}
 
+  '@types/diff@7.0.2':
+    resolution: {integrity: sha512-JSWRMozjFKsGlEjiiKajUjIJVKuKdE3oVy2DNtK+fUo8q82nhFZ2CPQwicAIkXrofahDXrWJ7mjelvZphMS98Q==}
+
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
 
@@ -1492,6 +1501,10 @@ packages:
   detect-libc@2.1.2:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
+
+  diff@8.0.3:
+    resolution: {integrity: sha512-qejHi7bcSD4hQAZE0tNAawRK1ZtafHDmMTMkrrIGgSLl7hTnQHmKCeB45xAcbfTqK2zowkM3j3bHt/4b/ARbYQ==}
+    engines: {node: '>=0.3.1'}
 
   drizzle-kit@0.30.6:
     resolution: {integrity: sha512-U4wWit0fyZuGuP7iNmRleQyK2V8wCuv57vf5l3MnG4z4fzNTjY/U13M8owyQ5RavqvqxBifWORaR3wIUzlN64g==}
@@ -3137,6 +3150,8 @@ snapshots:
     dependencies:
       '@types/node': 25.3.3
 
+  '@types/diff@7.0.2': {}
+
   '@types/estree@1.0.8': {}
 
   '@types/node@25.3.3':
@@ -3253,6 +3268,8 @@ snapshots:
   deep-extend@0.6.0: {}
 
   detect-libc@2.1.2: {}
+
+  diff@8.0.3: {}
 
   drizzle-kit@0.30.6:
     dependencies:
