@@ -19,6 +19,24 @@ const github = new Hono();
 
 github.use("*", requireAuth);
 
+// Run async tasks with limited concurrency
+async function concurrentMap<T, R>(
+  items: T[],
+  fn: (item: T) => Promise<R>,
+  concurrency = 5,
+): Promise<R[]> {
+  const results: R[] = [];
+  let i = 0;
+  async function next(): Promise<void> {
+    const idx = i++;
+    if (idx >= items.length) return;
+    results[idx] = await fn(items[idx]);
+    await next();
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => next()));
+  return results;
+}
+
 function getOctokit(token: string) {
   return new Octokit({ auth: token });
 }
@@ -51,45 +69,47 @@ async function fullImportRepoFiles(
     .delete(schema.projectFiles)
     .where(eq(schema.projectFiles.projectId, projectId));
 
-  let fileCount = 0;
   const fileChanges: FileChange[] = [];
 
-  for (const item of tree.tree) {
-    if (item.type === "blob" && item.path && item.sha) {
-      const isText = TEXT_EXTS.some((ext) => item.path!.toLowerCase().endsWith(ext));
-      const oldContent = isText ? readProjectFile(projectId, item.path) : null;
+  const blobs = tree.tree.filter((item) => item.type === "blob" && item.path && item.sha);
+  const dirs = tree.tree.filter((item) => item.type === "tree" && item.path);
 
-      const { data: blob } = await octokit.rest.git.getBlob({
-        owner, repo, file_sha: item.sha,
-      });
-      const content = Buffer.from(blob.content, "base64");
-      writeProjectFile(projectId, item.path, content);
+  // Download blobs in parallel (concurrency-limited)
+  await concurrentMap(blobs, async (item) => {
+    const isText = TEXT_EXTS.some((ext) => item.path!.toLowerCase().endsWith(ext));
+    const oldContent = isText ? readProjectFile(projectId, item.path!) : null;
 
-      if (isText) {
-        const newContent = content.toString("utf-8");
-        if (oldContent !== newContent) {
-          fileChanges.push({
-            path: item.path,
-            diffType: oldContent != null ? "modify" : "create",
-            oldContent, newContent,
-          });
-        }
+    const { data: blob } = await octokit.rest.git.getBlob({
+      owner, repo, file_sha: item.sha!,
+    });
+    const content = Buffer.from(blob.content, "base64");
+    writeProjectFile(projectId, item.path!, content);
+
+    if (isText) {
+      const newContent = content.toString("utf-8");
+      if (oldContent !== newContent) {
+        fileChanges.push({
+          path: item.path!,
+          diffType: oldContent != null ? "modify" : "create",
+          oldContent, newContent,
+        });
       }
-
-      await db.insert(schema.projectFiles).values({
-        id: nanoid(), projectId, path: item.path,
-        isDirectory: false, sizeBytes: content.length,
-      });
-      fileCount++;
-    } else if (item.type === "tree" && item.path) {
-      await db.insert(schema.projectFiles).values({
-        id: nanoid(), projectId, path: item.path,
-        isDirectory: true, sizeBytes: 0,
-      });
     }
+
+    await db.insert(schema.projectFiles).values({
+      id: nanoid(), projectId, path: item.path!,
+      isDirectory: false, sizeBytes: content.length,
+    });
+  });
+
+  for (const dir of dirs) {
+    await db.insert(schema.projectFiles).values({
+      id: nanoid(), projectId, path: dir.path!,
+      isDirectory: true, sizeBytes: 0,
+    });
   }
 
-  return { fileCount, fileChanges };
+  return { fileCount: blobs.length, fileChanges };
 }
 
 // Incremental pull: compares old and new trees, only downloads changed files.
@@ -131,11 +151,10 @@ async function incrementalPull(
   );
   const deletedPaths = [...oldBlobs.keys()].filter((p) => !newPaths.has(p));
 
-  let fileCount = 0;
   const fileChanges: FileChange[] = [];
 
-  // Download changed/new files
-  for (const item of changedBlobs) {
+  // Download changed/new files in parallel (concurrency-limited)
+  await concurrentMap(changedBlobs, async (item) => {
     const isText = TEXT_EXTS.some((ext) => item.path!.toLowerCase().endsWith(ext));
     const oldContent = isText ? readProjectFile(projectId, item.path!) : null;
 
@@ -173,8 +192,7 @@ async function incrementalPull(
         isDirectory: false, sizeBytes: content.length,
       });
     }
-    fileCount++;
-  }
+  });
 
   // Handle new directories
   const newDirs = newTree.tree.filter((i) => i.type === "tree" && i.path);
@@ -210,7 +228,7 @@ async function incrementalPull(
     );
   }
 
-  return { fileCount, fileChanges };
+  return { fileCount: changedBlobs.length + deletedPaths.length, fileChanges };
 }
 
 // List user's repos
@@ -410,18 +428,11 @@ github.post(
       );
     }
 
-    // Create blobs and tree entries
+    // Create blobs and tree entries (parallel, concurrency-limited)
     const files = listProjectFiles(projectId).filter((f) => !f.isDirectory);
-    const treeEntries: Array<{
-      path: string;
-      mode: "100644";
-      type: "blob";
-      sha: string;
-    }> = [];
-
-    for (const file of files) {
+    const treeEntries = (await concurrentMap(files, async (file) => {
       const content = readProjectFileBinary(projectId, file.path);
-      if (!content) continue;
+      if (!content) return null;
 
       const { data: blob } = await octokit.rest.git.createBlob({
         owner,
@@ -430,13 +441,13 @@ github.post(
         encoding: "base64",
       });
 
-      treeEntries.push({
+      return {
         path: file.path,
-        mode: "100644",
-        type: "blob",
+        mode: "100644" as const,
+        type: "blob" as const,
         sha: blob.sha,
-      });
-    }
+      };
+    })).filter((e): e is NonNullable<typeof e> => e !== null);
 
     // Create tree
     const { data: tree } = await octokit.rest.git.createTree({
@@ -575,7 +586,6 @@ github.post(
         : await fullImportRepoFiles(octokit, owner, repo, remoteSha, projectId);
 
       if (fileChanges.length > 0) {
-        const { userId } = c.get("user");
         recordEdit({
           projectId,
           userId,

@@ -148,42 +148,60 @@ export function GitHubPanel({ projectId, onClose, onPullComplete }: Props) {
               <span className="text-gray-500">Branch: </span>
               <span className="text-gray-200">{status.branch}</span>
             </div>
-            <div className="text-sm">
-              <span className="text-gray-500">Status: </span>
-              <span
-                className={status.inSync ? "text-green-400" : "text-yellow-400"}
-              >
-                {status.inSync ? "In sync" : "Out of sync"}
-              </span>
-            </div>
 
-            <div className="space-y-2">
-              <button
-                onClick={handlePull}
-                disabled={syncing}
-                className="w-full rounded bg-gray-800 py-1.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-50"
-              >
-                {syncing ? "Pulling..." : "Pull"}
-              </button>
-
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={commitMsg}
-                  onChange={(e) => setCommitMsg(e.target.value)}
-                  placeholder="Commit message..."
-                  className="flex-1 rounded border border-gray-700 bg-gray-800 px-2 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
-                  onKeyDown={(e) => e.key === "Enter" && handlePush()}
-                />
+            {status.error ? (
+              <>
+                <div className="rounded border border-yellow-500/30 bg-yellow-950/30 p-2 text-sm text-yellow-300">
+                  {status.error}
+                </div>
                 <button
-                  onClick={handlePush}
-                  disabled={syncing || !commitMsg.trim()}
-                  className="rounded bg-green-700 px-3 py-1.5 text-sm text-white hover:bg-green-600 disabled:opacity-50"
+                  onClick={() => { setError(null); loadStatus(); }}
+                  disabled={loading}
+                  className="w-full rounded bg-gray-800 py-1.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-50"
                 >
-                  Push
+                  {loading ? "Checking..." : "Retry"}
                 </button>
-              </div>
-            </div>
+              </>
+            ) : (
+              <>
+                <div className="text-sm">
+                  <span className="text-gray-500">Status: </span>
+                  <span
+                    className={status.inSync ? "text-green-400" : "text-yellow-400"}
+                  >
+                    {status.inSync ? "In sync" : "Out of sync"}
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  <button
+                    onClick={handlePull}
+                    disabled={syncing}
+                    className="w-full rounded bg-gray-800 py-1.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-50"
+                  >
+                    {syncing ? "Pulling..." : "Pull"}
+                  </button>
+
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={commitMsg}
+                      onChange={(e) => setCommitMsg(e.target.value)}
+                      placeholder="Commit message..."
+                      className="flex-1 rounded border border-gray-700 bg-gray-800 px-2 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                      onKeyDown={(e) => e.key === "Enter" && handlePush()}
+                    />
+                    <button
+                      onClick={handlePush}
+                      disabled={syncing || !commitMsg.trim()}
+                      className="rounded bg-green-700 px-3 py-1.5 text-sm text-white hover:bg-green-600 disabled:opacity-50"
+                    >
+                      Push
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
 
             <button
               onClick={handleUnlink}
