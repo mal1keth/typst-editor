@@ -5,9 +5,10 @@ interface Props {
   projectId: string;
   onClose: () => void;
   onPullComplete: () => void;
+  onBeforePush?: () => Promise<void>;
 }
 
-export function GitHubPanel({ projectId, onClose, onPullComplete }: Props) {
+export function GitHubPanel({ projectId, onClose, onPullComplete, onBeforePush }: Props) {
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [repos, setRepos] = useState<GithubRepo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,6 +74,9 @@ export function GitHubPanel({ projectId, onClose, onPullComplete }: Props) {
     setPushing(true);
     setError(null);
     try {
+      // Flush the active file's editor content to disk before pushing,
+      // so the server reads up-to-date content (auto-save may not have fired yet)
+      await onBeforePush?.();
       await api.github.push(projectId, commitMsg.trim());
       setCommitMsg("");
       await loadStatus();
