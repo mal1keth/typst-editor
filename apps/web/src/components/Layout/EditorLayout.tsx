@@ -370,6 +370,19 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
                     <GitHubPanel
                       projectId={projectId}
                       onClose={() => setShowGitHub(false)}
+                      onBeforePush={async () => {
+                        // Flush editor content to disk so push reads up-to-date files
+                        if (saveTimerRef.current) {
+                          clearTimeout(saveTimerRef.current);
+                          saveTimerRef.current = null;
+                        }
+                        const path = useProjectStore.getState().activeFilePath;
+                        const content = contentRef.current;
+                        if (path && content !== null && !readOnly) {
+                          setActiveFileContent(content);
+                          await saveFile(path, content);
+                        }
+                      }}
                       onPullComplete={async () => {
                         // Cancel any pending debounced save to prevent stale
                         // local content from overwriting freshly pulled files
