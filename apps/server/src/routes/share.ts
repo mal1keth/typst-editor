@@ -135,6 +135,17 @@ share.post("/shares/:token/join", requireAuth, async (c) => {
       permission: link.permission,
       addedViaShareLink: link.id,
     });
+  } else {
+    // Upgrade permission if the link grants more than they currently have.
+    // Without this, a user added as a read collaborator would stay read-only
+    // even after clicking a write link.
+    const rank: Record<string, number> = { read: 1, write: 2, admin: 3 };
+    if (rank[link.permission] > rank[existing.permission]) {
+      await db
+        .update(schema.collaborators)
+        .set({ permission: link.permission })
+        .where(eq(schema.collaborators.id, existing.id));
+    }
   }
 
   // Increment use count

@@ -9,6 +9,7 @@ import { typst } from "codemirror-lang-typst";
 interface EditorPanelProps {
   initialContent: string;
   onChange: (content: string, changes: ChangeSet) => void;
+  readOnly?: boolean;
 }
 
 // React.memo prevents this component from re-rendering when parent state
@@ -16,7 +17,7 @@ interface EditorPanelProps {
 // when initialContent or onChange identity changes. Since onChange uses the
 // onChangeRef pattern, it stays stable — so the editor is fully isolated
 // from compilation/preview updates.
-export const EditorPanel = memo(function EditorPanel({ initialContent, onChange }: EditorPanelProps) {
+export const EditorPanel = memo(function EditorPanel({ initialContent, onChange, readOnly = false }: EditorPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
@@ -45,6 +46,8 @@ export const EditorPanel = memo(function EditorPanel({ initialContent, onChange 
         typst(),
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
         updateListener,
+        EditorState.readOnly.of(readOnly),
+        EditorView.editable.of(!readOnly),
         EditorView.theme({
           "&": { height: "100%" },
           ".cm-scroller": { overflow: "auto" },

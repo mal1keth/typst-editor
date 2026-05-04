@@ -80,16 +80,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       activeFilePath: null,
       activeFileContent: null,
       shareToken: shareToken || null,
+      // Default to read-only for share sessions until we learn the link's permission.
       readOnly: !!shareToken,
     });
     try {
       let project: ProjectWithFiles;
+      let readOnly = false;
       if (shareToken) {
-        project = await api.shared.project(shareToken);
+        const shared = await api.shared.project(shareToken);
+        project = shared;
+        readOnly = shared.permission !== "write";
       } else {
         project = await api.projects.get(id);
       }
-      set({ currentProject: project, loadingProject: false });
+      set({ currentProject: project, loadingProject: false, readOnly });
 
       // Auto-open the main file
       if (project.mainFile) {

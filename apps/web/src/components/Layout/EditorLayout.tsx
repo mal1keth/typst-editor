@@ -169,16 +169,19 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
       // Save whatever is in contentRef right now
       const path = useProjectStore.getState().activeFilePath;
       const content = contentRef.current;
-      if (path && content !== null && !readOnly) {
+      if (path && content !== null && !readOnly && !shareToken) {
         setActiveFileContent(content);
         saveFile(path, content);
       }
     }
-  }, [saveFile, setActiveFileContent, readOnly]);
+  }, [saveFile, setActiveFileContent, readOnly, shareToken]);
 
-  // Set up collaboration when file changes (skip for anonymous share access)
+  // Set up collaboration whenever a file is open. Share-link sessions
+  // pass the token so the server can grant the link's permission; without
+  // it, anonymous viewers wouldn't see live edits and write-link users
+  // couldn't push their changes upstream.
   useEffect(() => {
-    if (!activeFilePath || !currentProject || shareToken) return;
+    if (!activeFilePath || !currentProject) return;
 
     // Flush any pending save from the previous file
     flushSave();
@@ -204,6 +207,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
       (users) => {
         setPresenceUsers(users);
       },
+      shareToken,
     );
 
     collabRef.current = collab;
@@ -249,8 +253,10 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
         });
       }
 
-      // Debounced save (skip for read-only)
-      if (!readOnly) {
+      // Debounced HTTP save. Skip for read-only and for share-token
+      // sessions — share writers persist through the Yjs WebSocket, and
+      // the HTTP route requires real auth which they don't have.
+      if (!readOnly && !shareToken) {
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(() => {
           if (activeFilePath) {
@@ -260,7 +266,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
         }, 1500);
       }
     },
-    [activeFilePath, saveFile, setActiveFileContent, triggerCompile, compileMode, readOnly]
+    [activeFilePath, saveFile, setActiveFileContent, triggerCompile, compileMode, readOnly, shareToken]
   );
 
   const handleOpenFile = useCallback((path: string) => {
@@ -347,6 +353,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
         compileMode={compileMode}
         compiling={compiling}
         readOnly={readOnly}
+        isShared={!!shareToken}
         autoPullStatus={autoPullStatus}
         onBack={onBack}
         onShare={handleShare}
@@ -407,7 +414,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
                       onDoubleClickFile={showHistory ? (path: string) => setHistoryFileFilter(path) : undefined}
                       onDownloadFile={handleDownloadFile}
                       onResetFile={currentProject.githubRepoFullName ? handleResetFile : undefined}
-                      {...(!readOnly && {
+                      {...(!readOnly && !shareToken && {
                         onCreateFile: handleCreateFile,
                         onDeleteFile: deleteFile,
                         onSetMainFile: updateMainFile,
@@ -509,6 +516,7 @@ export function EditorLayout({ projectId, shareToken, onBack }: Props) {
                     key={`${activeFilePath}:${editorResetKey}`}
                     initialContent={editorInitialContent}
                     onChange={handleChange}
+                    readOnly={readOnly}
                   />
                 </Panel>
                 {showCompilerOutput && (

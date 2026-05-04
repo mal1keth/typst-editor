@@ -121,13 +121,16 @@ app.get(
 
     // Read token from httpOnly cookie (query param fallback for compat)
     const token = getCookie(c, "token") || c.req.query("token");
+    const shareToken = c.req.query("shareToken");
 
     let permission = "read";
     let userInfo: WsUserInfo | null = null;
+    let authenticated = false;
 
     if (token) {
       const payload = await verifyToken(token);
       if (payload) {
+        authenticated = true;
         // Resolve user info for presence
         const user = await db.query.users.findFirst({
           where: eq(schema.users.id, payload.userId),
@@ -158,6 +161,24 @@ app.get(
           });
           permission = collab?.permission || "read";
         }
+      }
+    }
+
+    // If no auth (or auth gave no project access), fall back to share token.
+    // Anonymous + valid share token grants the link's permission for that project.
+    if (!authenticated && shareToken) {
+      const link = await db.query.shareLinks.findFirst({
+        where: eq(schema.shareLinks.token, shareToken),
+      });
+      const validLink =
+        link &&
+        link.isActive &&
+        link.projectId === projectId &&
+        (!link.expiresAt || new Date(link.expiresAt) >= new Date()) &&
+        (!link.maxUses || (link.useCount ?? 0) < link.maxUses);
+
+      if (validLink) {
+        permission = link.permission;
       }
     }
 

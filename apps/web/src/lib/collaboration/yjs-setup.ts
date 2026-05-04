@@ -24,6 +24,7 @@ export function setupCollaboration(
   onRemoteUpdate: (content: string) => void,
   onConnectionChange: (connected: boolean, peerCount: number) => void,
   onPresenceChange?: (users: PresenceUser[]) => void,
+  shareToken?: string,
 ): CollabState {
   const doc = new Y.Doc();
   const ytext = doc.getText("content");
@@ -45,8 +46,13 @@ export function setupCollaboration(
 
   // No token needed in URL — the httpOnly auth cookie is automatically
   // sent with the WebSocket upgrade request by the browser.
+  // Anonymous share-link sessions append ?shareToken=... so the server
+  // can grant permission based on the link.
   const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = `${wsProtocol}//${window.location.host}/ws/yjs/${projectId}/${encodeURIComponent(filePath)}`;
+  const baseUrl = `${wsProtocol}//${window.location.host}/ws/yjs/${projectId}/${encodeURIComponent(filePath)}`;
+  const wsUrl = shareToken
+    ? `${baseUrl}?shareToken=${encodeURIComponent(shareToken)}`
+    : baseUrl;
 
   function connect() {
     const ws = new WebSocket(wsUrl);

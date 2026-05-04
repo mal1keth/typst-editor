@@ -8,6 +8,8 @@ interface Props {
   compileMode: 'live' | 'manual';
   compiling: boolean;
   readOnly?: boolean;
+  /** Anonymous share-link session — hide owner-only actions (Share, GitHub, History) */
+  isShared?: boolean;
   autoPullStatus?: string | null;
   onBack: () => void;
   onShare: () => void;
@@ -28,6 +30,7 @@ export const Toolbar = memo(function Toolbar({
   compileMode,
   compiling,
   readOnly,
+  isShared,
   autoPullStatus,
   onBack,
   onShare,
@@ -46,7 +49,7 @@ export const Toolbar = memo(function Toolbar({
           onClick={onBack}
           className="text-sm text-gray-400 hover:text-gray-200"
         >
-          &larr; {readOnly ? "Back" : "Projects"}
+          &larr; {readOnly || isShared ? "Back" : "Projects"}
         </button>
         <span className="text-gray-600">|</span>
         <h1 className="font-semibold text-gray-100">{projectName}</h1>
@@ -97,23 +100,23 @@ export const Toolbar = memo(function Toolbar({
             </span>
           )}
         </button>
-        {!readOnly && (
+        {onHistory && !isShared && (
+          <button
+            onClick={onHistory}
+            className="rounded bg-gray-800 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
+          >
+            History
+          </button>
+        )}
+        <button
+          onClick={onExportPdf}
+          disabled={exportingPdf}
+          className="rounded bg-gray-800 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 disabled:opacity-50"
+        >
+          {exportingPdf ? "Exporting..." : "PDF"}
+        </button>
+        {!isShared && (
           <>
-            {onHistory && (
-              <button
-                onClick={onHistory}
-                className="rounded bg-gray-800 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-              >
-                History
-              </button>
-            )}
-            <button
-              onClick={onExportPdf}
-              disabled={exportingPdf}
-              className="rounded bg-gray-800 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 disabled:opacity-50"
-            >
-              {exportingPdf ? "Exporting..." : "PDF"}
-            </button>
             <button
               onClick={onGitHub}
               className={`rounded px-3 py-1.5 text-sm ${
